@@ -15,6 +15,30 @@ add_executable(wgpu_jolt_app
 
 target_compile_features(wgpu_jolt_app PRIVATE cxx_std_20)
 
+if(WGPU_JOLT_USE_SYSTEM_DEPS)
+    find_package(glm CONFIG QUIET)
+endif()
+
+if(NOT TARGET glm::glm)
+    FetchContent_Declare(
+        glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 0.9.9.8
+        GIT_SHALLOW TRUE
+    )
+
+    FetchContent_GetProperties(glm)
+    if(NOT glm_POPULATED)
+        FetchContent_Populate(glm)
+    endif()
+
+    add_library(glm_headers INTERFACE)
+    add_library(glm::glm ALIAS glm_headers)
+    target_include_directories(glm_headers INTERFACE ${glm_SOURCE_DIR})
+endif()
+
+target_link_libraries(wgpu_jolt_app PRIVATE glm::glm)
+
 if(MSVC)
     set_property(TARGET wgpu_jolt_app PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
