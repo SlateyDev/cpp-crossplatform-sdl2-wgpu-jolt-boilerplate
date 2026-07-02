@@ -17,8 +17,12 @@
 #include <SDL_syswm.h>
 #endif
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <atomic>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -100,6 +104,7 @@ struct GpuState {
     WGPUInstance instance = nullptr;
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
+    WGPUSurfaceConfiguration surfaceConfig{};
     WGPUQueue queue = nullptr;
     WGPUSurface surface = nullptr;
     WGPUBuffer rotationUniformBuffer = nullptr;
@@ -107,7 +112,6 @@ struct GpuState {
     WGPUBindGroup rotationBindGroup = nullptr;
     WGPUPipelineLayout pipelineLayout = nullptr;
     WGPURenderPipeline pipeline = nullptr;
-    WGPUTextureFormat surfaceFormat = WGPUTextureFormat_Undefined;
     uint32_t width = 1280;
     uint32_t height = 720;
 };
@@ -151,48 +155,56 @@ bool EnsureRotationResources(GpuState &gpu)
         return true;
     }
 
-    WGPUBufferDescriptor bufferDesc{};
-    bufferDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    bufferDesc.size = sizeof(RotationUniform);
-    bufferDesc.mappedAtCreation = 0;
+    WGPUBufferDescriptor bufferDesc {
+        .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
+        .size = sizeof(RotationUniform),
+        .mappedAtCreation = 0,
+    };
     gpu.rotationUniformBuffer = wgpuDeviceCreateBuffer(gpu.device, &bufferDesc);
     if (!gpu.rotationUniformBuffer) {
         return false;
     }
 
-    WGPUBindGroupLayoutEntry bglEntry{};
-    bglEntry.binding = 0;
-    bglEntry.visibility = WGPUShaderStage_Vertex;
-    bglEntry.buffer.type = WGPUBufferBindingType_Uniform;
-    bglEntry.buffer.hasDynamicOffset = 0;
-    bglEntry.buffer.minBindingSize = sizeof(RotationUniform);
+    WGPUBindGroupLayoutEntry bglEntry {
+        .binding = 0,
+        .visibility = WGPUShaderStage_Vertex,
+        .buffer = {
+            .type = WGPUBufferBindingType_Uniform,
+            .hasDynamicOffset = 0,
+            .minBindingSize = sizeof(RotationUniform),
+        },
+    };
 
-    WGPUBindGroupLayoutDescriptor bglDesc{};
-    bglDesc.entryCount = 1;
-    bglDesc.entries = &bglEntry;
+    WGPUBindGroupLayoutDescriptor bglDesc {
+        .entryCount = 1,
+        .entries = &bglEntry,
+    };
     gpu.rotationBindGroupLayout = wgpuDeviceCreateBindGroupLayout(gpu.device, &bglDesc);
     if (!gpu.rotationBindGroupLayout) {
         return false;
     }
 
-    WGPUBindGroupEntry bgEntry{};
-    bgEntry.binding = 0;
-    bgEntry.buffer = gpu.rotationUniformBuffer;
-    bgEntry.offset = 0;
-    bgEntry.size = sizeof(RotationUniform);
+    WGPUBindGroupEntry bgEntry {
+        .binding = 0,
+        .buffer = gpu.rotationUniformBuffer,
+        .offset = 0,
+        .size = sizeof(RotationUniform),
+    };
 
-    WGPUBindGroupDescriptor bgDesc{};
-    bgDesc.layout = gpu.rotationBindGroupLayout;
-    bgDesc.entryCount = 1;
-    bgDesc.entries = &bgEntry;
+    WGPUBindGroupDescriptor bgDesc {
+        .layout = gpu.rotationBindGroupLayout,
+        .entryCount = 1,
+        .entries = &bgEntry,
+    };
     gpu.rotationBindGroup = wgpuDeviceCreateBindGroup(gpu.device, &bgDesc);
     if (!gpu.rotationBindGroup) {
         return false;
     }
 
-    WGPUPipelineLayoutDescriptor pipelineLayoutDesc{};
-    pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &gpu.rotationBindGroupLayout;
+    WGPUPipelineLayoutDescriptor pipelineLayoutDesc {
+        .bindGroupLayoutCount = 1,
+        .bindGroupLayouts = &gpu.rotationBindGroupLayout,
+    };
     gpu.pipelineLayout = wgpuDeviceCreatePipelineLayout(gpu.device, &pipelineLayoutDesc);
     return gpu.pipelineLayout != nullptr;
 }
@@ -246,40 +258,54 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
 }
 )";
 
-    WGPUShaderSourceWGSL wgslSource{};
-    wgslSource.chain.next = nullptr;
-    wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslSource.code = ToWgpuString(kTriangleShader);
+    WGPUShaderSourceWGSL wgslSource {
+        .chain = WGPUChainedStruct{
+            .next = nullptr,
+            .sType = WGPUSType_ShaderSourceWGSL
+        },
+        .code = ToWgpuString(kTriangleShader),
+    };
 
-    WGPUShaderModuleDescriptor shaderDesc{};
-    shaderDesc.nextInChain = &wgslSource.chain;
+    WGPUShaderModuleDescriptor shaderDesc {
+        .nextInChain = &wgslSource.chain,
+    };
+
     WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(gpu.device, &shaderDesc);
     if (!shaderModule) {
         return nullptr;
     }
 
-    WGPUColorTargetState colorTarget{};
-    colorTarget.format = format;
-    colorTarget.writeMask = WGPUColorWriteMask_All;
+    WGPUColorTargetState colorTarget {
+        .format = format,
+        .writeMask = WGPUColorWriteMask_All,
+    };
 
-    WGPUFragmentState fragmentState{};
-    fragmentState.module = shaderModule;
-    fragmentState.entryPoint = ToWgpuString("fs_main");
-    fragmentState.targetCount = 1;
-    fragmentState.targets = &colorTarget;
+    WGPUFragmentState fragmentState {
+        .module = shaderModule,
+        .entryPoint = ToWgpuString("fs_main"),
+        .targetCount = 1,
+        .targets = &colorTarget,
+    };
 
-    WGPURenderPipelineDescriptor pipelineDesc{};
-    pipelineDesc.layout = gpu.pipelineLayout;
-    pipelineDesc.vertex.module = shaderModule;
-    pipelineDesc.vertex.entryPoint = ToWgpuString("vs_main");
-    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
-    pipelineDesc.primitive.stripIndexFormat = WGPUIndexFormat_Undefined;
-    pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
-    pipelineDesc.primitive.cullMode = WGPUCullMode_None;
-    pipelineDesc.multisample.count = 1;
-    pipelineDesc.multisample.mask = ~0u;
-    pipelineDesc.multisample.alphaToCoverageEnabled = 0;
-    pipelineDesc.fragment = &fragmentState;
+    WGPURenderPipelineDescriptor pipelineDesc {
+        .layout = gpu.pipelineLayout,
+        .vertex = {
+            .module = shaderModule,
+            .entryPoint = ToWgpuString("vs_main"),
+        },
+        .primitive = {
+            .topology = WGPUPrimitiveTopology_TriangleList,
+            .stripIndexFormat = WGPUIndexFormat_Undefined,
+            .frontFace = WGPUFrontFace_CCW,
+            .cullMode = WGPUCullMode_None,
+        },
+        .multisample = {
+            .count = 1,
+            .mask = ~0u,
+            .alphaToCoverageEnabled = 0,
+        },
+        .fragment = &fragmentState,
+    };
 
     WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
     wgpuShaderModuleRelease(shaderModule);
@@ -378,19 +404,16 @@ bool ConfigureSurface(AppState &app)
         return false;
     }
 
-    app.gpu.surfaceFormat = ChooseSurfaceFormat(caps);
-    WGPUCompositeAlphaMode alphaMode = caps.alphaModeCount > 0 ? caps.alphaModes[0] : WGPUCompositeAlphaMode_Auto;
-    WGPUPresentMode presentMode = caps.presentModeCount > 0 ? caps.presentModes[0] : WGPUPresentMode_Fifo;
-
-    WGPUSurfaceConfiguration config{};
-    config.device = app.gpu.device;
-    config.format = app.gpu.surfaceFormat;
-    config.usage = WGPUTextureUsage_RenderAttachment;
-    config.width = app.gpu.width;
-    config.height = app.gpu.height;
-    config.alphaMode = alphaMode;
-    config.presentMode = presentMode;
-    wgpuSurfaceConfigure(app.gpu.surface, &config);
+    app.gpu.surfaceConfig = WGPUSurfaceConfiguration{
+        .device = app.gpu.device,
+        .format = ChooseSurfaceFormat(caps),
+        .usage = WGPUTextureUsage_RenderAttachment,
+        .width = app.gpu.width,
+        .height = app.gpu.height,
+        .alphaMode = caps.alphaModeCount > 0 ? caps.alphaModes[0] : WGPUCompositeAlphaMode_Auto,
+        .presentMode = caps.presentModeCount > 0 ? caps.presentModes[0] : WGPUPresentMode_Fifo,
+    };
+    wgpuSurfaceConfigure(app.gpu.surface, &app.gpu.surfaceConfig);
     wgpuSurfaceCapabilitiesFreeMembers(caps);
 
     if (!EnsureRotationResources(app.gpu)) {
@@ -402,7 +425,7 @@ bool ConfigureSurface(AppState &app)
         wgpuRenderPipelineRelease(app.gpu.pipeline);
         app.gpu.pipeline = nullptr;
     }
-    app.gpu.pipeline = CreateTrianglePipeline(app.gpu, app.gpu.surfaceFormat);
+    app.gpu.pipeline = CreateTrianglePipeline(app.gpu, app.gpu.surfaceConfig.format);
     return app.gpu.pipeline != nullptr;
 }
 
@@ -416,8 +439,9 @@ bool DrawFrame(AppState &app)
         return ConfigureSurface(app);
     }
 
-    RotationUniform rotation{};
-    rotation.angle = static_cast<float>(SDL_GetTicks()) * 0.0015f;
+    RotationUniform rotation {
+        .angle = static_cast<float>(SDL_GetTicks()) * 0.0015f,
+    };
     wgpuQueueWriteBuffer(
         app.gpu.queue,
         app.gpu.rotationUniformBuffer,
@@ -440,16 +464,18 @@ bool DrawFrame(AppState &app)
         return false;
     }
 
-    WGPURenderPassColorAttachment colorAttachment{};
-    colorAttachment.view = view;
-    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-    colorAttachment.loadOp = WGPULoadOp_Clear;
-    colorAttachment.storeOp = WGPUStoreOp_Store;
-    colorAttachment.clearValue = WGPUColor{0.08, 0.08, 0.12, 1.0};
+    WGPURenderPassColorAttachment colorAttachment {
+        .view = view,
+        .depthSlice = WGPU_DEPTH_SLICE_UNDEFINED,
+        .loadOp = WGPULoadOp_Clear,
+        .storeOp = WGPUStoreOp_Store,
+        .clearValue = WGPUColor{0.08, 0.08, 0.12, 1.0},
+    };
 
-    WGPURenderPassDescriptor passDesc{};
-    passDesc.colorAttachmentCount = 1;
-    passDesc.colorAttachments = &colorAttachment;
+    WGPURenderPassDescriptor passDesc {
+        .colorAttachmentCount = 1,
+        .colorAttachments = &colorAttachment,
+    };
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
     wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
@@ -512,8 +538,9 @@ bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *out
     };
     callbackInfo.userdata1 = &context;
 
-    WGPURequestAdapterOptions adapterOptions{};
-    adapterOptions.compatibleSurface = surface;
+    WGPURequestAdapterOptions adapterOptions {
+        .compatibleSurface = surface,
+    };
     wgpuInstanceRequestAdapter(instance, &adapterOptions, callbackInfo);
 
     while (!done.load()) {
