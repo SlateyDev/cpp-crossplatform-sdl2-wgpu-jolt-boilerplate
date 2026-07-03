@@ -9,8 +9,10 @@ include(FetchContent)
 
 option(WGPU_JOLT_USE_SYSTEM_DEPS "Use pre-installed webgpu/Jolt instead of FetchContent" OFF)
 
+file(GLOB_RECURSE SOURCE_FILES src/*.cpp)
+
 add_executable(wgpu_jolt_app
-    src/main.cpp
+    ${SOURCE_FILES}
 )
 
 target_compile_features(wgpu_jolt_app PRIVATE cxx_std_20)
@@ -109,6 +111,8 @@ if(EMSCRIPTEN)
         "-sUSE_SDL=2"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASYNCIFY"
+        "--preload-file"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
     )
     target_link_libraries(wgpu_jolt_app PRIVATE ${WGPU_TARGET})
     set_target_properties(wgpu_jolt_app PROPERTIES SUFFIX ".html")
