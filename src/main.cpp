@@ -121,10 +121,15 @@ struct alignas(16) ModelMatrixUniform {
 constexpr uint32_t CASCADE_COUNT = 4;
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
+constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 0.5, 0.5,
+    0.0, 0.0, 0.0, 1.0);
+
 struct alignas(16) LightUniform {
     struct alignas(16) Cascade {
         glm::mat4 viewProjectionMatrix;
-        glm::vec4 cascadeSplitDepths;
+        float splitDepth;
     } cascades[CASCADE_COUNT];
     glm::vec4 position = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 };
@@ -245,6 +250,8 @@ struct FlyCamera : public Camera {
         rotation.z = xzLen * std::sin(yaw + glm::pi<float>() * 0.5f);
     }
 };
+
+FlyCamera flyCamera;
 
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
@@ -669,10 +676,158 @@ bool ConfigureSurface(AppState &app)
     return app.gpu.pipeline != nullptr;
 }
 
-constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(1.0, 0.0, 0.0, 0.0,
-	0.0, 1.0, 0.0, 0.0,
-	0.0, 0.0, 0.5, 0.5,
-	0.0, 0.0, 0.0, 1.0);
+std::array<glm::vec3, 8> BuildCascadeFrustumCorners(const AppState &app, const float nearDist, const float farDist) {
+    std::array<glm::vec3, 8> corners;
+
+    const float aspect = static_cast<float>(app.gpu.width) / static_cast<float>(app.gpu.height);
+    const float halfFovTan = tan(flyCamera.fov * 0.5f);
+
+    const glm::vec3 forward = glm::normalize(flyCamera.rotation);
+    const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+    const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+
+    const glm::vec3 nearCenter = flyCamera.position + (forward * nearDist);
+    const glm::vec3 farCenter = flyCamera.position + (forward * farDist);
+
+    const float nearHalfHeight = nearDist * halfFovTan;
+    const float nearHalfWidth = nearHalfHeight * aspect;
+    const float farHalfHeight = farDist * halfFovTan;
+    const float farHalfWidth = farHalfHeight * aspect;
+
+    corners[0] = nearCenter - right * nearHalfWidth + up * nearHalfHeight;
+    corners[1] = nearCenter + right * nearHalfWidth + up * nearHalfHeight;
+    corners[2] = nearCenter + right * nearHalfWidth - up * nearHalfHeight;
+    corners[3] = nearCenter - right * nearHalfWidth - up * nearHalfHeight;
+    corners[4] = farCenter - right * farHalfWidth + up * farHalfHeight;
+    corners[5] = farCenter + right * farHalfWidth + up * farHalfHeight;
+    corners[6] = farCenter + right * farHalfWidth - up * farHalfHeight;
+    corners[7] = farCenter - right * farHalfWidth - up * farHalfHeight;
+    return corners;
+}
+
+std::array<float, CASCADE_COUNT> CalculateCascadeSplits() {
+    std::array<float, CASCADE_COUNT> splits;
+
+    const float nearPlane = flyCamera.nearPlane;
+    const float farPlane = flyCamera.farPlane;
+
+    for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
+        constexpr float lambda = 0.5f;
+        const float p = static_cast<float>(i + 1) / static_cast<float>(CASCADE_COUNT);
+        const float logSplit = nearPlane * std::pow(farPlane / nearPlane, p);
+        const float uniformSplit = nearPlane + (farPlane - nearPlane) * p;
+        splits[i] = lambda * logSplit + (1.0f - lambda) * uniformSplit;
+    }
+    return splits;
+}
+
+void UpdateCascadeData(const AppState &app) {
+    const auto splits = CalculateCascadeSplits();
+    const auto lightDir = glm::vec3(glm::normalize(-directionalLight.position));
+
+    for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
+        const float cascadeNear = i == 0 ? flyCamera.nearPlane : splits[i - 1];
+        const float cascadeFar = splits[i];
+        const auto corners = BuildCascadeFrustumCorners(app, cascadeNear, cascadeFar);
+
+        glm::vec3 frustumCenter(0.0f);
+        for (const auto &corner : corners) {
+            frustumCenter += corner;
+        }
+        frustumCenter /= static_cast<float>(corners.size());
+
+        auto lightUp = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(lightDir, lightUp)) > 0.99f) {
+            lightUp = glm::vec3(1.0f, 0.0f, 0.0f);
+        }
+
+        auto lightRight = glm::normalize(glm::cross(lightUp, lightDir));
+        lightUp = glm::normalize(glm::cross(lightDir, lightRight));
+
+        float minX = std::numeric_limits<float>::max();
+        float minY = std::numeric_limits<float>::max();
+        float minZ = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::min();
+        float maxY = std::numeric_limits<float>::min();
+        float maxZ = std::numeric_limits<float>::min();
+        for (const auto &corner : corners) {
+            const auto offset = corner - frustumCenter;
+            const auto x= glm::dot(offset, lightRight);
+            const auto y= glm::dot(offset, lightUp);
+            const auto z= glm::dot(offset, lightDir);
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            minZ = std::min(minZ, z);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+            maxZ = std::max(maxZ, z);
+        }
+
+        auto radius = std::max(std::max(std::abs(minX), std::abs(maxX)), std::max(std::abs(minY), std::abs(maxY)));
+        radius = std::max(radius, std::max(std::abs(minZ), std::abs(maxZ))) + 10.0f;
+
+        auto lightPos = frustumCenter + lightDir * radius;
+        auto lightView = glm::lookAt(lightPos, frustumCenter, lightUp);
+        auto lightProj = glm::ortho(-radius, radius, -radius, radius, -2.0f * radius, 2.0f * radius);
+
+        directionalLight.cascades[i].viewProjectionMatrix = OPEN_GL_TO_WGPU_MATRIX * lightProj * lightView;
+        directionalLight.cascades[i].splitDepth = cascadeNear;
+    }
+}
+
+void RenderObjects(const WGPURenderPassEncoder pass) {
+    for (const auto& obj : objects) {
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
+
+        auto it = meshes.find(obj.meshName);
+
+        if (it != meshes.end()) {
+            const Mesh& mesh = it->second;
+            for (const auto& primitive : mesh.primitives) {
+                const auto& material = materials[primitive.materialResourceName];
+                wgpuRenderPassEncoderSetBindGroup(pass, 2, material.bindGroup, 0, nullptr);
+                if (primitive.vertexCount != 0 && primitive.vertexBuffer != nullptr) {
+                    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, primitive.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                }
+                if (primitive.indexCount != 0 && primitive.indexBuffer != nullptr) {
+                    wgpuRenderPassEncoderSetIndexBuffer(pass, primitive.indexBuffer, WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
+                }
+
+                if (primitive.indexCount > 0) {
+                    wgpuRenderPassEncoderDrawIndexed(pass, primitive.indexCount, 1, 0, 0, 0);
+                } else {
+                    wgpuRenderPassEncoderDraw(pass, primitive.vertexCount, 1, 0, 0);
+                }
+            }
+        }
+    }
+}
+
+void RenderShadowObjects(const WGPURenderPassEncoder pass) {
+    for (const auto& obj : objects) {
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
+
+        auto it = meshes.find(obj.meshName);
+
+        if (it != meshes.end()) {
+            const Mesh& mesh = it->second;
+            for (const auto& primitive : mesh.primitives) {
+                if (primitive.vertexCount != 0 && primitive.vertexBuffer != nullptr) {
+                    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, primitive.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                }
+                if (primitive.indexCount != 0 && primitive.indexBuffer != nullptr) {
+                    wgpuRenderPassEncoderSetIndexBuffer(pass, primitive.indexBuffer, WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
+                }
+
+                if (primitive.indexCount > 0) {
+                    wgpuRenderPassEncoderDrawIndexed(pass, primitive.indexCount, 1, 0, 0, 0);
+                } else {
+                    wgpuRenderPassEncoderDraw(pass, primitive.vertexCount, 1, 0, 0);
+                }
+            }
+        }
+    }
+}
 
 bool DrawFrame(AppState &app)
 {
@@ -704,56 +859,86 @@ bool DrawFrame(AppState &app)
     gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks())) * 1.2f, 0.0f));
     gameObject1.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()), 0.0f));
 
-    auto forward = glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f));
-    // app.gpu.viewMatrix = glm::lookAt(
-    //     glm::vec3(0.0f, 0.0f, -4.0f),
-    //     glm::vec3(0.0f, 0.0f, 1.0f),
-    //     glm::vec3(0.0f, -1.0f, 0.0f)
-    // );
+    const auto forward = glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f));
+    app.gpu.viewMatrix = glm::lookAt(
+        flyCamera.position,
+        flyCamera.position + forward,
+        flyCamera.up
+    );
 
-    auto transform = OPEN_GL_TO_WGPU_MATRIX * app.gpu.projectionMatrix * app.gpu.viewMatrix;
-    auto cameraData = CameraUniform{
+    const auto transform = OPEN_GL_TO_WGPU_MATRIX * app.gpu.projectionMatrix * app.gpu.viewMatrix;
+    const auto cameraData = CameraUniform{
         .viewProjectionMatrix = transform,
-        .position = glm::vec4(0.0f, 0.0f, -4.0f, 1.0f),
+        .position = glm::vec4(flyCamera.position, 1.0f),
         .forward = glm::vec4(forward, 0.0f),
     };
+    UpdateCascadeData(app);
 
-    // wgpuQueueWriteBuffer(
-    //     app.gpu.queue,
-    //     app.gpu.cameraUniformBuffer,
-    //     0,
-    //     &cameraData,
-    //     sizeof(cameraData)
-    // );
+    wgpuQueueWriteBuffer(
+        app.gpu.queue,
+        app.gpu.cameraUniformBuffer,
+        0,
+        &cameraData,
+        sizeof(CameraUniform)
+    );
 
-    // for (auto &object : objects) {
-    //     auto modelMatrix = glm::translate(glm::mat4(1.0f), object.translation)
-    //                      * glm::mat4_cast(object.rotation)
-    //                      * glm::scale(glm::mat4(1.0f), object.scale);
-    //     auto normalMatrix = glm::transpose(glm::inverse(modelMatrix));
-    //     ModelMatrixUniform modelMatrices{
-    //         .modelMatrix = modelMatrix,
-    //         .normalMatrix = normalMatrix,
-    //     };
-    //     wgpuQueueWriteBuffer(
-    //         app.gpu.queue,
-    //         object.uniformBuffer,
-    //         0,
-    //         &modelMatrices,
-    //         sizeof(modelMatrices)
-    //     );
-    // }
+    for (auto &object : objects) {
+        auto modelMatrix = glm::translate(glm::mat4(1.0f), object.translation)
+                         * glm::mat4_cast(object.rotation)
+                         * glm::scale(glm::mat4(1.0f), object.scale);
+        auto normalMatrix = glm::transpose(glm::inverse(modelMatrix));
+        ModelMatrixUniform modelMatrices{
+            .modelMatrix = modelMatrix,
+            .normalMatrix = normalMatrix,
+        };
+        wgpuQueueWriteBuffer(
+            app.gpu.queue,
+            object.uniformBuffer,
+            0,
+            &modelMatrices,
+            sizeof(modelMatrices)
+        );
+    }
 
-    // Shadow pass would go here, but for simplicity, we will skip it in this example.
+    auto shadowLight = directionalLight;
+    for (int cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
+        shadowLight.cascades[0] = directionalLight.cascades[cascadeIndex];
+        wgpuQueueWriteBuffer(app.gpu.queue, app.gpu.lightUniformBuffer, 0, &shadowLight, sizeof(LightUniform));
 
-    // wgpuQueueWriteBuffer(
-    //     app.gpu.queue,
-    //     app.gpu.lightUniformBuffer,
-    //     0,
-    //     &directionalLight,
-    //     sizeof(directionalLight)
-    // );
+        auto shadowCommandEncoder = wgpuDeviceCreateCommandEncoder(app.gpu.device, nullptr);
 
+        const auto depthStencilAttachment = WGPURenderPassDepthStencilAttachment{
+            .view = app.gpu.shadowDepthTextureViews[cascadeIndex],
+            .depthLoadOp = WGPULoadOp_Clear,
+            .depthStoreOp = WGPUStoreOp_Store,
+            .depthClearValue = 1.0f,
+        };
+        const auto renderPassDesc = WGPURenderPassDescriptor{
+            .colorAttachmentCount = 0,
+            .depthStencilAttachment = &depthStencilAttachment,
+        };
+        auto shadowRenderPassEncoder = wgpuCommandEncoderBeginRenderPass(shadowCommandEncoder, &renderPassDesc);
+
+        wgpuRenderPassEncoderSetPipeline(shadowRenderPassEncoder, pipelines["shadowCaster"]);
+        wgpuRenderPassEncoderSetBindGroup(shadowRenderPassEncoder, 0, app.gpu.sceneBindGroup, 0, nullptr);
+        RenderShadowObjects(shadowRenderPassEncoder);
+
+        wgpuRenderPassEncoderEnd(shadowRenderPassEncoder);
+        wgpuRenderPassEncoderRelease(shadowRenderPassEncoder);
+
+        auto shadowCommandBuffer = wgpuCommandEncoderFinish(shadowCommandEncoder, nullptr);
+        wgpuCommandEncoderRelease(shadowCommandEncoder);
+        wgpuQueueSubmit(app.gpu.queue, 1, &shadowCommandBuffer);
+        wgpuCommandBufferRelease(shadowCommandBuffer);
+    }
+
+    wgpuQueueWriteBuffer(
+        app.gpu.queue,
+        app.gpu.lightUniformBuffer,
+        0,
+        &directionalLight,
+        sizeof(LightUniform)
+    );
 
     WGPUCommandEncoderDescriptor encoderDesc{};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(app.gpu.device, &encoderDesc);
@@ -770,34 +955,40 @@ bool DrawFrame(AppState &app)
         .storeOp = WGPUStoreOp_Store,
         .clearValue = WGPUColor{0.2, 0.2, 0.2, 1.0},
     };
-    // WGPURenderPassDepthStencilAttachment depthAttachment {
-    //     .view = depthTextureView, // No depth attachment for this simple example
-    //     .depthLoadOp = WGPULoadOp_Clear,
-    //     .depthStoreOp = WGPUStoreOp_Store,
-    //     .depthClearValue = 1.0f,
-    //     .stencilLoadOp = WGPULoadOp_Clear,
-    //     .stencilStoreOp = WGPUStoreOp_Store,
-    //     .stencilClearValue = 0,
-    //     .stencilReadOnly = true,
-    // };
+    WGPURenderPassDepthStencilAttachment depthAttachment {
+        .view = app.gpu.depthTextureView, // No depth attachment for this simple example
+        .depthLoadOp = WGPULoadOp_Clear,
+        .depthStoreOp = WGPUStoreOp_Store,
+        .depthClearValue = 1.0f,
+        .stencilLoadOp = WGPULoadOp_Clear,
+        .stencilStoreOp = WGPUStoreOp_Store,
+        .stencilClearValue = 0,
+        .stencilReadOnly = true,
+    };
     WGPURenderPassDescriptor passDesc {
         .colorAttachmentCount = 1,
         .colorAttachments = &colorAttachment,
-        // .depthStencilAttachment = &depthAttachment,
+        .depthStencilAttachment = &depthAttachment,
     };
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
-    wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
-    // wgpuRenderPassEncoderSetPipeline(pass, pipelines["forwardRenderer"]);
-    // wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.sceneBindGroup, 0, nullptr);
-    // wgpuRenderPassEncoderSetBindGroup(pass, 3, shadowSamplerBindGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetPipeline(pass, pipelines["forwardRenderer"]);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.sceneBindGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetBindGroup(pass, 3, app.gpu.shadowBindGroup, 0, nullptr);
 
-    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
-    // RenderObjects(pass);
+    RenderObjects(pass);
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
+
+    // Test triangle to make sure everything is still working
+    // passDesc.depthStencilAttachment = nullptr;
+    // pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    // wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
+    // wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
+    // wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    // wgpuRenderPassEncoderEnd(pass);
+    // wgpuRenderPassEncoderRelease(pass);
 
     WGPUCommandBuffer commandBuffer = wgpuCommandEncoderFinish(encoder, nullptr);
     if (!commandBuffer) {
@@ -997,33 +1188,6 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
     };
 
     return wgpuDeviceCreateShaderModule(device, &shaderDesc);
-}
-
-void RenderObjects(WGPURenderPassEncoder pass) {
-    for (const auto& obj : objects) {
-        wgpuRenderPassEncoderSetBindGroup(pass, 0, obj.uniformBindGroup, 0, nullptr);
-
-        auto it = meshes.find(obj.meshName);
-
-        if (it != meshes.end()) {
-            const Mesh& mesh = it->second;
-            for (const auto& primitive : mesh.primitives) {
-                // wgpuRenderPassEncoderSetBindGroup(pass, 2, material.bind_group, 0, nullptr);
-                if (primitive.vertexCount != 0 && primitive.vertexBuffer != nullptr) {
-                    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, primitive.vertexBuffer, 0, WGPU_WHOLE_SIZE);
-                }
-                if (primitive.indexCount != 0 && primitive.indexBuffer != nullptr) {
-                    wgpuRenderPassEncoderSetIndexBuffer(pass, primitive.indexBuffer, WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
-                }
-
-                if (primitive.indexCount > 0) {
-                    wgpuRenderPassEncoderDrawIndexed(pass, primitive.indexCount, 1, 0, 0, 0);
-                } else {
-                    wgpuRenderPassEncoderDraw(pass, primitive.vertexCount, 1, 0, 0);
-                }
-            }
-        }
-    }
 }
 
 std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue queue, const std::string& filepath) {
@@ -1570,14 +1734,14 @@ int main()
     }();
 
     pipelines["shadowCaster"] = [&] {
-        WGPUVertexAttribute vertexAttributes[] = {
+        constexpr WGPUVertexAttribute vertexAttributes[] = {
             {
                 .format = WGPUVertexFormat_Float32x3,
                 .offset = offsetof(Vertex, position),
                 .shaderLocation = 0,
             },
         };
-        auto vertexBufferLayouts = std::to_array<WGPUVertexBufferLayout>({
+        const auto vertexBufferLayouts = std::to_array<WGPUVertexBufferLayout>({
             WGPUVertexBufferLayout{
                 .stepMode = WGPUVertexStepMode_Vertex,
                 .arrayStride = sizeof(Vertex),
