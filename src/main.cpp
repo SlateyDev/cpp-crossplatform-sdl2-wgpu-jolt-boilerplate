@@ -30,7 +30,6 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -177,9 +176,6 @@ struct GpuState {
 };
 
 auto directionalLightPosition = glm::vec3(50.0f, 100.0f, -100.0f);
-auto directionLightviewMatrix = glm::lookAt(directionalLightPosition, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-auto directionalLightProjectionMatrix = glm::ortho(-40.0f, 40.0f, -40.0f, 40.0f, -20.0f, 300.0f);
-auto directionalLightViewProjectionMatrix = directionalLightProjectionMatrix * directionLightviewMatrix;
 auto directionalLight = LightUniform{
     .position = glm::vec4(directionalLightPosition, 1.0f),
 };
@@ -187,8 +183,6 @@ auto directionalLight = LightUniform{
 struct Mesh {
     std::vector<Primitive> primitives;
 };
-
-const uint32_t BUFFER_SIZE = 16384;
 
 std::unordered_map<std::string, WGPUShaderModule> shaders;
 std::unordered_map<std::string, WGPUPipelineLayout> pipelineLayouts;
@@ -293,7 +287,7 @@ bool EnsureRotationResources(GpuState &gpu)
     }
 
     gpu.rotationUniformBuffer = [&] {
-        WGPUBufferDescriptor bufferDesc {
+        const WGPUBufferDescriptor bufferDesc {
             .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
             .size = sizeof(RotationUniform),
             .mappedAtCreation = 0,
@@ -305,7 +299,7 @@ bool EnsureRotationResources(GpuState &gpu)
     }
 
     gpu.rotationBindGroupLayout = [&] {
-        const auto bglEntries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto bglEntries = std::to_array<WGPUBindGroupLayoutEntry>({
             {
                 .binding = 0,
                 .visibility = WGPUShaderStage_Vertex,
@@ -316,7 +310,7 @@ bool EnsureRotationResources(GpuState &gpu)
                 },
             },
         });
-        WGPUBindGroupLayoutDescriptor bglDesc {
+        const WGPUBindGroupLayoutDescriptor bglDesc {
             .entryCount = static_cast<uint32_t>(bglEntries.size()),
             .entries = bglEntries.data(),
         };
@@ -335,7 +329,7 @@ bool EnsureRotationResources(GpuState &gpu)
                 .size = sizeof(RotationUniform),
             },
         });
-        WGPUBindGroupDescriptor bgDesc {
+        const WGPUBindGroupDescriptor bgDesc {
             .layout = gpu.rotationBindGroupLayout,
             .entryCount = static_cast<uint32_t>(bgEntries.size()),
             .entries = bgEntries.data(),
@@ -347,7 +341,7 @@ bool EnsureRotationResources(GpuState &gpu)
     }
 
     gpu.pipelineLayout = [&] {
-        WGPUPipelineLayoutDescriptor pipelineLayoutDesc {
+        const WGPUPipelineLayoutDescriptor pipelineLayoutDesc {
             .bindGroupLayoutCount = 1,
             .bindGroupLayouts = &gpu.rotationBindGroupLayout,
         };
@@ -405,7 +399,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
 }
 )";
 
-    WGPUShaderSourceWGSL wgslSource {
+    const WGPUShaderSourceWGSL wgslSource {
         .chain = WGPUChainedStruct{
             .next = nullptr,
             .sType = WGPUSType_ShaderSourceWGSL
@@ -413,28 +407,28 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .code = ToWgpuString(kTriangleShader),
     };
 
-    WGPUShaderModuleDescriptor shaderDesc {
+    const WGPUShaderModuleDescriptor shaderDesc {
         .nextInChain = &wgslSource.chain,
     };
 
-    WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(gpu.device, &shaderDesc);
+    const WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(gpu.device, &shaderDesc);
     if (!shaderModule) {
         return nullptr;
     }
 
-    WGPUColorTargetState colorTarget {
+    const WGPUColorTargetState colorTarget {
         .format = format,
         .writeMask = WGPUColorWriteMask_All,
     };
 
-    WGPUFragmentState fragmentState {
+    const WGPUFragmentState fragmentState {
         .module = shaderModule,
         .entryPoint = ToWgpuString("fs_main"),
         .targetCount = 1,
         .targets = &colorTarget,
     };
 
-    WGPURenderPipelineDescriptor pipelineDesc {
+    const WGPURenderPipelineDescriptor pipelineDesc {
         .layout = gpu.pipelineLayout,
         .vertex = {
             .module = shaderModule,
@@ -454,7 +448,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .fragment = &fragmentState,
     };
 
-    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
+    const WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
     wgpuShaderModuleRelease(shaderModule);
     return pipeline;
 }
@@ -651,16 +645,16 @@ bool ConfigureSurface(AppState &app)
     }
 
     app.gpu.projectionMatrix = glm::perspective(
-        glm::radians(45.0f),
+        flyCamera.fov,
         static_cast<float>(app.gpu.width) / static_cast<float>(app.gpu.height),
-        0.1f,
-        100.0f
+        flyCamera.nearPlane,
+        flyCamera.farPlane
     );
 
     app.gpu.viewMatrix = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, -4.0f),
-        glm::vec3(0.0f, 0.0f, 1.0f),
-        glm::vec3(0.0f, -1.0f, 0.0f)
+        glm::vec3(0.0f, 0.0f, 4.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f)
     );
 
     if (!EnsureRotationResources(app.gpu)) {
@@ -859,11 +853,11 @@ bool DrawFrame(AppState &app)
     gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks())) * 1.2f, 0.0f));
     gameObject1.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()), 0.0f));
 
-    const auto forward = glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f));
+    const auto forward = glm::normalize(flyCamera.rotation);
     app.gpu.viewMatrix = glm::lookAt(
         flyCamera.position,
         flyCamera.position + forward,
-        flyCamera.up
+        glm::vec3(0.0f, 1.0f, 0.0f)
     );
 
     const auto transform = OPEN_GL_TO_WGPU_MATRIX * app.gpu.projectionMatrix * app.gpu.viewMatrix;
@@ -896,7 +890,7 @@ bool DrawFrame(AppState &app)
             object.uniformBuffer,
             0,
             &modelMatrices,
-            sizeof(modelMatrices)
+            sizeof(ModelMatrixUniform)
         );
     }
 
@@ -1174,7 +1168,7 @@ std::string readShaderFile(const std::string& filepath) {
 }
 
 WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepath) {
-    std::string shaderCode = readShaderFile(filepath);
+    const std::string shaderCode = readShaderFile(filepath);
     WGPUShaderSourceWGSL wgslSource {
         .chain = WGPUChainedStruct{
             .next = nullptr,
@@ -1183,7 +1177,7 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
         .code = {shaderCode.c_str(), WGPU_STRLEN},
     };
 
-    WGPUShaderModuleDescriptor shaderDesc {
+    const WGPUShaderModuleDescriptor shaderDesc {
         .nextInChain = &wgslSource.chain,
     };
 
@@ -1206,10 +1200,10 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
         return {};
     }
 
-    uint32_t width = static_cast<uint32_t>(convertedSurface->w);
-    uint32_t height = static_cast<uint32_t>(convertedSurface->h);
+    const uint32_t width = static_cast<uint32_t>(convertedSurface->w);
+    const uint32_t height = static_cast<uint32_t>(convertedSurface->h);
 
-    WGPUTextureDescriptor textureDesc {
+    const WGPUTextureDescriptor textureDesc {
         .label = {filepath.c_str(), WGPU_STRLEN},
         .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
         .dimension = WGPUTextureDimension_2D,
@@ -1220,18 +1214,18 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
     };
     WGPUTexture texture = wgpuDeviceCreateTexture(device, &textureDesc);
 
-    WGPUTexelCopyTextureInfo destination {
+    const WGPUTexelCopyTextureInfo destination {
         .texture = texture,
         .mipLevel = 0,
         .origin = {0, 0, 0},
         .aspect = WGPUTextureAspect_All,
     };
-    WGPUTexelCopyBufferLayout dataLayout {
+    const WGPUTexelCopyBufferLayout dataLayout {
         .offset = 0,
         .bytesPerRow = static_cast<uint32_t>(convertedSurface->pitch),
         .rowsPerImage = height,
     };
-    WGPUExtent3D writeSize {
+    const WGPUExtent3D writeSize {
         .width = width,
         .height = height,
         .depthOrArrayLayers = 1,
@@ -1252,7 +1246,7 @@ void CreateDepthTexture(AppState &app)
     }
     std::cout << "Creating depth texture of size: " << app.gpu.surfaceConfig.width << "x" << app.gpu.surfaceConfig.height << std::endl;
     app.gpu.depthTexture = [&] {
-        WGPUTextureDescriptor depthDesc {
+        const WGPUTextureDescriptor depthDesc {
             .label = ToWgpuString("Depth Texture"),
             .usage = WGPUTextureUsage_RenderAttachment,
             .dimension = WGPUTextureDimension_2D,
@@ -1272,7 +1266,7 @@ void CreateDepthTexture(AppState &app)
     }
     std::cout << "Creating depth texture view" << std::endl;
     app.gpu.depthTextureView = [&] {
-        WGPUTextureViewDescriptor viewDesc {
+        const WGPUTextureViewDescriptor viewDesc {
             .label = ToWgpuString("Depth Texture View"),
             .format = DEPTH_FORMAT,
             .dimension = WGPUTextureViewDimension_2D,
