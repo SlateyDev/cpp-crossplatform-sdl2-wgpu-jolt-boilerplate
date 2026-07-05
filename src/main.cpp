@@ -118,8 +118,8 @@ struct alignas(16) ModelMatrixUniform {
     glm::mat4 normalMatrix = glm::mat4(1.0f);
 };
 
-const uint32_t CASCADE_COUNT = 4;
-const uint32_t SHADOW_MAP_SIZE = 2048;
+constexpr uint32_t CASCADE_COUNT = 4;
+constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
 struct alignas(16) LightUniform {
     struct alignas(16) Cascade {
@@ -161,6 +161,14 @@ struct GpuState {
     WGPUBuffer lightUniformBuffer = nullptr;
     WGPUBindGroupLayout sceneBindGroupLayout = nullptr;
     WGPUBindGroup sceneBindGroup = nullptr;
+    WGPUTexture shadowDepthTexture = nullptr;
+    std::array<WGPUTextureView, CASCADE_COUNT> shadowDepthTextureViews;
+    WGPUTextureView shadowDepthTextureArrayView = nullptr;
+    WGPUSampler shadowSampler = nullptr;
+    WGPUBindGroupLayout shadowBindGroupLayout = nullptr;
+    WGPUBindGroup shadowBindGroup = nullptr;
+    WGPUTexture depthTexture = nullptr;
+    WGPUTextureView depthTextureView = nullptr;
 };
 
 auto directionalLightPosition = glm::vec3(50.0f, 100.0f, -100.0f);
@@ -189,6 +197,54 @@ std::vector<MeshInstance> objects;
 MeshInstance gameObject1;
 MeshInstance gameObject2;
 MeshInstance gameObject3;
+
+constexpr WGPUTextureFormat DEPTH_FORMAT = WGPUTextureFormat_Depth32Float;
+
+struct Camera {
+    glm::vec3 position{0.0f, 0.0f, -4.0f};
+    glm::vec3 rotation{0.0f, 0.0f, 1.0f};
+    glm::vec3 up{0.0f, -1.0f, 0.0f};
+    float fov = glm::radians(72.0f);
+    float nearPlane = 0.1f;
+    float farPlane = 100.0f;
+};
+
+constexpr float CAMERA_SPEED = 0.3f;
+
+struct FlyCamera : public Camera {
+    float pitch = 0.0f;
+    float yaw = 0.0f;
+
+    void MoveForward(float delta)
+    {
+        position += glm::normalize(glm::vec3(rotation.x, rotation.y, rotation.z)) * delta;
+    }
+
+    void MoveRight(float delta)
+    {
+        position += glm::normalize(glm::cross(rotation, up)) * delta;
+    }
+
+    void AdjustPitch(float delta)
+    {
+        pitch = std::clamp<float>(pitch - delta * glm::radians(CAMERA_SPEED), -glm::radians(89.0f), glm::radians(89.0f));
+        UpdateRotation();
+    }
+
+    void AdjustYaw(float delta)
+    {
+        yaw += delta * glm::radians(CAMERA_SPEED);
+        UpdateRotation();
+    }
+
+    void UpdateRotation()
+    {
+        const float xzLen = std::cos(pitch);
+        rotation.x = xzLen * std::cos(yaw + glm::pi<float>() * 0.5f);
+        rotation.y = std::sin(pitch);
+        rotation.z = xzLen * std::sin(yaw + glm::pi<float>() * 0.5f);
+    }
+};
 
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
@@ -432,6 +488,32 @@ bool CreateSurfaceFromWindow(WGPUInstance instance, SDL_Window *window, WGPUSurf
 
 void ReleaseGpu(GpuState &gpu)
 {
+    if (gpu.shadowBindGroup) {
+        wgpuBindGroupRelease(gpu.shadowBindGroup);
+        gpu.shadowBindGroup = nullptr;
+    }
+    if (gpu.shadowBindGroupLayout) {
+        wgpuBindGroupLayoutRelease(gpu.shadowBindGroupLayout);
+        gpu.shadowBindGroupLayout = nullptr;
+    }
+    if (gpu.shadowSampler) {
+        wgpuSamplerRelease(gpu.shadowSampler);
+        gpu.shadowSampler = nullptr;
+    }
+    for (auto &view : gpu.shadowDepthTextureViews) {
+        if (view) {
+            wgpuTextureViewRelease(view);
+            view = nullptr;
+        }
+    }
+    if (gpu.shadowDepthTextureArrayView) {
+        wgpuTextureViewRelease(gpu.shadowDepthTextureArrayView);
+        gpu.shadowDepthTextureArrayView = nullptr;
+    }
+    if (gpu.shadowDepthTexture) {
+        wgpuTextureRelease(gpu.shadowDepthTexture);
+        gpu.shadowDepthTexture = nullptr;
+    }
     if (gpu.defaultSampler) {
         wgpuSamplerRelease(gpu.defaultSampler);
         gpu.defaultSampler = nullptr;
@@ -587,7 +669,7 @@ bool ConfigureSurface(AppState &app)
     return app.gpu.pipeline != nullptr;
 }
 
-const auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(1.0, 0.0, 0.0, 0.0,
+constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(1.0, 0.0, 0.0, 0.0,
 	0.0, 1.0, 0.0, 0.0,
 	0.0, 0.0, 0.5, 0.5,
 	0.0, 0.0, 0.0, 1.0);
@@ -997,6 +1079,49 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
     return {texture, wgpuTextureCreateView(texture, nullptr)};
 }
 
+void CreateDepthTexture(AppState &app)
+{
+    if (app.gpu.depthTexture) {
+        std::cout << "Releasing existing depth texture" << std::endl;
+        wgpuTextureRelease(app.gpu.depthTexture);
+        app.gpu.depthTexture = nullptr;
+    }
+    std::cout << "Creating depth texture of size: " << app.gpu.surfaceConfig.width << "x" << app.gpu.surfaceConfig.height << std::endl;
+    app.gpu.depthTexture = [&] {
+        WGPUTextureDescriptor depthDesc {
+            .label = ToWgpuString("Depth Texture"),
+            .usage = WGPUTextureUsage_RenderAttachment,
+            .dimension = WGPUTextureDimension_2D,
+            .size = {app.gpu.surfaceConfig.width, app.gpu.surfaceConfig.height, 1},
+            .format = DEPTH_FORMAT,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+            .viewFormatCount = 0,
+        };
+        return wgpuDeviceCreateTexture(app.gpu.device, &depthDesc);
+    }();
+
+    if (app.gpu.depthTextureView) {
+        std::cout << "Releasing existing depth texture view" << std::endl;
+        wgpuTextureViewRelease(app.gpu.depthTextureView);
+        app.gpu.depthTextureView = nullptr;
+    }
+    std::cout << "Creating depth texture view" << std::endl;
+    app.gpu.depthTextureView = [&] {
+        WGPUTextureViewDescriptor viewDesc {
+            .label = ToWgpuString("Depth Texture View"),
+            .format = DEPTH_FORMAT,
+            .dimension = WGPUTextureViewDimension_2D,
+            .baseMipLevel = 0,
+            .mipLevelCount = 1,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = 1,
+            .aspect = WGPUTextureAspect_DepthOnly,
+        };
+        return wgpuTextureCreateView(app.gpu.depthTexture, &viewDesc);
+    }();
+}
+
 int main()
 {
     IMG_Init(IMG_INIT_PNG);
@@ -1178,6 +1303,118 @@ int main()
         return wgpuDeviceCreateBindGroup(app.gpu.device, &desc);
     }();
 
+    app.gpu.shadowDepthTexture = [&] {
+        const WGPUTextureDescriptor desc{
+            .label = ToWgpuString("Shadow Depth Texture"),
+            .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_RenderAttachment,
+            .dimension = WGPUTextureDimension_2D,
+            .size = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, CASCADE_COUNT},
+            .format = DEPTH_FORMAT,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+        };
+        std::cout << "Creating shadow depth texture of size: " << SHADOW_MAP_SIZE << "x" << SHADOW_MAP_SIZE << " with " << CASCADE_COUNT << " cascades\n";
+        return wgpuDeviceCreateTexture(app.gpu.device, &desc);
+    }();
+
+    for (uint32_t cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
+        app.gpu.shadowDepthTextureViews[cascadeIndex] = [&] {
+            const WGPUTextureViewDescriptor desc{
+                .label = ToWgpuString("Shadow Depth Texture View"),
+                .format = DEPTH_FORMAT,
+                .dimension = WGPUTextureViewDimension_2D,
+                .baseMipLevel = 0,
+                .mipLevelCount = 1,
+                .baseArrayLayer = cascadeIndex,
+                .arrayLayerCount = 1,
+                .aspect = WGPUTextureAspect_DepthOnly,
+            };
+            std::cout << "Creating shadow depth texture view for cascade " << cascadeIndex << "\n";
+            return wgpuTextureCreateView(app.gpu.shadowDepthTexture, &desc);
+        }();
+    }
+
+    app.gpu.shadowDepthTextureArrayView = [&] {
+        const WGPUTextureViewDescriptor desc{
+            .label = ToWgpuString("Shadow Depth Texture View"),
+            .format = DEPTH_FORMAT,
+            .dimension = WGPUTextureViewDimension_2DArray,
+            .baseMipLevel = 0,
+            .mipLevelCount = 1,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = CASCADE_COUNT,
+            .aspect = WGPUTextureAspect_DepthOnly,
+        };
+        std::cout << "Creating shadow depth texture array view for all cascades\n";
+        return wgpuTextureCreateView(app.gpu.shadowDepthTexture, &desc);
+    }();
+
+    app.gpu.shadowSampler = [&] {
+        const WGPUSamplerDescriptor desc{
+            .label = ToWgpuString("Shadow Comparison Sampler"),
+            .addressModeU = WGPUAddressMode_ClampToEdge,
+            .addressModeV = WGPUAddressMode_ClampToEdge,
+            .addressModeW = WGPUAddressMode_ClampToEdge,
+            .magFilter = WGPUFilterMode_Linear,
+            .minFilter = WGPUFilterMode_Linear,
+            .mipmapFilter = WGPUMipmapFilterMode_Nearest,
+            .lodMinClamp = 0.0f,
+            .lodMaxClamp = 32.0f,
+            .compare = WGPUCompareFunction_LessEqual,
+            .maxAnisotropy = 1,
+        };
+        std::cout << "Creating shadow comparison sampler\n";
+        return wgpuDeviceCreateSampler(app.gpu.device, &desc);
+    }();
+
+    app.gpu.shadowBindGroupLayout = [&] {
+        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+            WGPUBindGroupLayoutEntry{
+                .binding = 0,
+                .visibility = WGPUShaderStage_Fragment,
+                .texture = WGPUTextureBindingLayout{
+                    .sampleType = WGPUTextureSampleType_Depth,
+                    .viewDimension = WGPUTextureViewDimension_2DArray,
+                    .multisampled = false,
+                },
+            },
+            WGPUBindGroupLayoutEntry{
+                .binding = 1,
+                .visibility = WGPUShaderStage_Fragment,
+                .sampler = WGPUSamplerBindingLayout{
+                    .type = WGPUSamplerBindingType_Comparison,
+                },
+            },
+        });
+        const WGPUBindGroupLayoutDescriptor desc{
+            .label = ToWgpuString("Shadow Bind Group Layout"),
+            .entryCount = static_cast<uint32_t>(entries.size()),
+            .entries = entries.data(),
+        };
+        std::cout << "Creating shadow bind group layout\n";
+        return wgpuDeviceCreateBindGroupLayout(app.gpu.device, &desc);
+    }();
+
+    app.gpu.shadowBindGroup = [&] {
+        const auto entries = std::to_array<WGPUBindGroupEntry>({
+            WGPUBindGroupEntry{
+                .binding = 0,
+                .textureView = app.gpu.shadowDepthTextureArrayView,
+            },
+            WGPUBindGroupEntry{
+                .binding = 1,
+                .sampler = app.gpu.shadowSampler,
+            },
+        });
+        const WGPUBindGroupDescriptor desc{
+            .label = ToWgpuString("Shadow Bind Group"),
+            .layout = app.gpu.shadowBindGroupLayout,
+            .entryCount = static_cast<uint32_t>(entries.size()),
+            .entries = entries.data(),
+        };
+        return wgpuDeviceCreateBindGroup(app.gpu.device, &desc);
+    }();
+
     // Load sample.png using SDL2 as texture and create a bind group for it
     auto [texture, textureView] = LoadImage(app.gpu.device, app.gpu.queue, "assets/sample.png");
     materials["sample.png"] = UnlitMaterial{
@@ -1205,21 +1442,179 @@ int main()
         }(),
     };
 
-    // pipelineLayouts["forwardRenderer"] = [&] {
-    //     const auto layouts = std::to_array<WGPUBindGroupLayout>({
-    //         app.gpu.sceneBindGroupLayout,
-    //         app.gpu.meshBindGroupLayout,
-    //         app.gpu.defaultSamplerBindGroupLayout,
-    //     });
-    //     const WGPUPipelineLayoutDescriptor desc{
-    //         .label = ToWgpuString("Forward Renderer Pipeline Layout"),
-    //         .bindGroupLayoutCount = static_cast<uint32_t>(layouts.size()),
-    //         .bindGroupLayouts = layouts.data(),
-    //     };
-    //     return wgpuDeviceCreatePipelineLayout(app.gpu.device, &desc);
-    // }();
+    std::cout << "Creating forward renderer pipeline layout\n";
+    pipelineLayouts["forwardRenderer"] = [&] {
+        const auto layouts = std::to_array<WGPUBindGroupLayout>({
+            app.gpu.sceneBindGroupLayout,
+            app.gpu.meshBindGroupLayout,
+            app.gpu.defaultSamplerBindGroupLayout,
+            app.gpu.shadowBindGroupLayout,
+        });
+        const WGPUPipelineLayoutDescriptor desc{
+            .label = ToWgpuString("Forward Renderer Pipeline Layout"),
+            .bindGroupLayoutCount = static_cast<uint32_t>(layouts.size()),
+            .bindGroupLayouts = layouts.data(),
+        };
+        return wgpuDeviceCreatePipelineLayout(app.gpu.device, &desc);
+    }();
 
-    //Create depth texture for shadow mapping
+    CreateDepthTexture(app);
+
+    std::cout << "Creating forward renderer pipeline\n";
+    pipelines["forwardRenderer"] = [&] {
+        WGPUVertexAttribute vertexAttributes[] = {
+            {
+                .format = WGPUVertexFormat_Float32x3,
+                .offset = offsetof(Vertex, position),
+                .shaderLocation = 0,
+            },
+            {
+                .format = WGPUVertexFormat_Float32x2,
+                .offset = offsetof(Vertex, uv),
+                .shaderLocation = 1,
+            },
+            {
+                .format = WGPUVertexFormat_Float32x3,
+                .offset = offsetof(Vertex, normal),
+                .shaderLocation = 2,
+            },
+        };
+        auto vertexBufferLayouts = std::to_array<WGPUVertexBufferLayout>({
+            WGPUVertexBufferLayout{
+                .stepMode = WGPUVertexStepMode_Vertex,
+                .arrayStride = sizeof(Vertex),
+                .attributeCount = static_cast<uint32_t>(std::size(vertexAttributes)),
+                .attributes = vertexAttributes,
+            }
+        });
+        WGPUBlendState blendState {
+            .color = {
+                .operation = WGPUBlendOperation_Add,
+                .srcFactor = WGPUBlendFactor_SrcAlpha,
+                .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
+            },
+            .alpha = {
+                .operation = WGPUBlendOperation_Add,
+                .srcFactor = WGPUBlendFactor_SrcAlpha,
+                .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
+            },
+        };
+        auto colorTargetState = std::to_array<WGPUColorTargetState>({
+            {
+                .format = WGPUTextureFormat_BGRA8Unorm,
+                .blend = &blendState,
+                .writeMask = WGPUColorWriteMask_All,
+            }
+        });
+        WGPUFragmentState fragmentState{
+            .module = shaders["forwardShader"],
+            .entryPoint = ToWgpuString("fs_main"),
+            .targetCount = static_cast<uint32_t>(colorTargetState.size()),
+            .targets = colorTargetState.data(),
+        };
+        WGPUDepthStencilState depthStencilState{
+            .format = DEPTH_FORMAT,
+            .depthWriteEnabled = WGPUOptionalBool_True,
+            .depthCompare = WGPUCompareFunction_Less,
+            .stencilFront = {
+                .compare = WGPUCompareFunction_Always,
+                .failOp = WGPUStencilOperation_Keep,
+                .depthFailOp = WGPUStencilOperation_Keep,
+                .passOp = WGPUStencilOperation_Keep,
+            },
+            .stencilBack = {
+                .compare = WGPUCompareFunction_Always,
+                .failOp = WGPUStencilOperation_Keep,
+                .depthFailOp = WGPUStencilOperation_Keep,
+                .passOp = WGPUStencilOperation_Keep,
+            },
+            .stencilReadMask = 0,
+            .stencilWriteMask = 0,
+        };
+        WGPURenderPipelineDescriptor pipelineDesc{
+            .label = ToWgpuString("Forward Renderer Pipeline"),
+            .layout = pipelineLayouts["forwardRenderer"],
+            .vertex = {
+                .module = shaders["forwardShader"],
+                .entryPoint = ToWgpuString("vs_main"),
+                .bufferCount = static_cast<uint32_t>(vertexBufferLayouts.size()),
+                .buffers = vertexBufferLayouts.data(),
+            },
+            .primitive = {
+                .topology = WGPUPrimitiveTopology_TriangleList,
+                .stripIndexFormat = WGPUIndexFormat_Undefined,
+                .frontFace = WGPUFrontFace_CCW,
+                .cullMode = WGPUCullMode_Back,
+            },
+            .depthStencil = &depthStencilState,
+            .multisample = {
+                .count = 1,
+                .mask = ~0u,
+            },
+            .fragment = &fragmentState,
+        };
+        return wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
+    }();
+
+    pipelineLayouts["shadowCaster"] = [&] {
+        const auto layouts = std::to_array<WGPUBindGroupLayout>({
+            app.gpu.sceneBindGroupLayout,
+            app.gpu.meshBindGroupLayout,
+        });
+        const WGPUPipelineLayoutDescriptor desc{
+            .label = ToWgpuString("Shadow Caster Pipeline Layout"),
+            .bindGroupLayoutCount = static_cast<uint32_t>(layouts.size()),
+            .bindGroupLayouts = layouts.data(),
+        };
+        return wgpuDeviceCreatePipelineLayout(app.gpu.device, &desc);
+    }();
+
+    pipelines["shadowCaster"] = [&] {
+        WGPUVertexAttribute vertexAttributes[] = {
+            {
+                .format = WGPUVertexFormat_Float32x3,
+                .offset = offsetof(Vertex, position),
+                .shaderLocation = 0,
+            },
+        };
+        auto vertexBufferLayouts = std::to_array<WGPUVertexBufferLayout>({
+            WGPUVertexBufferLayout{
+                .stepMode = WGPUVertexStepMode_Vertex,
+                .arrayStride = sizeof(Vertex),
+                .attributeCount = static_cast<uint32_t>(std::size(vertexAttributes)),
+                .attributes = vertexAttributes,
+            }
+        });
+        WGPUDepthStencilState depthStencilState{
+            .format = DEPTH_FORMAT,
+            .depthWriteEnabled = WGPUOptionalBool_True,
+            .depthCompare = WGPUCompareFunction_Less,
+        };
+        WGPURenderPipelineDescriptor pipelineDesc{
+            .label = ToWgpuString("Shadow Caster Pipeline"),
+            .layout = pipelineLayouts["shadowCaster"],
+            .vertex = {
+                .module = shaders["shadowCaster"],
+                .entryPoint = ToWgpuString("vs_main"),
+                .bufferCount = static_cast<uint32_t>(vertexBufferLayouts.size()),
+                .buffers = vertexBufferLayouts.data(),
+            },
+            .primitive = {
+                .topology = WGPUPrimitiveTopology_TriangleList,
+                .stripIndexFormat = WGPUIndexFormat_Undefined,
+                .frontFace = WGPUFrontFace_CCW,
+                .cullMode = WGPUCullMode_Back,
+            },
+            .depthStencil = &depthStencilState,
+            .multisample = {
+                .count = 1,
+                .mask = ~0u,
+            },
+            // No depth/stencil state for shadow caster in this simple example
+            // No fragment state for shadow caster in this simple example
+        };
+        return wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
+    }();
 
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop_arg(WasmMainLoop, &app, 0, 1);
