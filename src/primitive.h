@@ -20,7 +20,6 @@ class Primitive {
         WGPUBuffer indexBuffer = nullptr;
         uint32_t indexCount = 0;
 
-    public:
         static Primitive CreateFromPremadeData(WGPUDevice device, const std::vector<Vertex> &vertices, const std::vector<int> &indices, std::string materialKey);
 };
 

@@ -1,7 +1,5 @@
 #include "primitive.h"
 
-#include <cstring>
-
 const std::vector<Vertex> boxVertices = {
     // Top face
     {glm::vec3(-0.5f, -0.5f,  0.5f), glm::vec2(0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)},

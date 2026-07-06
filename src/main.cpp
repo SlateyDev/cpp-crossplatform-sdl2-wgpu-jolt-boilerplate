@@ -17,6 +17,8 @@
 #include <SDL_syswm.h>
 #endif
 
+// #define TRIANGLE_SAMPLE
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -146,13 +148,15 @@ struct GpuState {
     WGPUSurfaceConfiguration surfaceConfig{};
     WGPUQueue queue = nullptr;
     WGPUSurface surface = nullptr;
-    WGPUBuffer rotationUniformBuffer = nullptr;
-    WGPUBindGroupLayout rotationBindGroupLayout = nullptr;
-    WGPUBindGroup rotationBindGroup = nullptr;
-    WGPUPipelineLayout pipelineLayout = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
-    uint32_t width = 1280;
-    uint32_t height = 720;
+#ifdef TRIANGLE_SAMPLE
+    WGPUBuffer rotationUniformBuffer = nullptr; //
+    WGPUBindGroupLayout rotationBindGroupLayout = nullptr; //
+    WGPUBindGroup rotationBindGroup = nullptr; //
+    WGPUPipelineLayout pipelineLayout = nullptr; //
+    WGPURenderPipeline pipeline = nullptr; //
+#endif
+    uint32_t width = 1280; //
+    uint32_t height = 720; //
 
     WGPUSampler defaultSampler = nullptr;
     WGPUBindGroupLayout defaultSamplerBindGroupLayout = nullptr;
@@ -166,7 +170,7 @@ struct GpuState {
     WGPUBindGroupLayout sceneBindGroupLayout = nullptr;
     WGPUBindGroup sceneBindGroup = nullptr;
     WGPUTexture shadowDepthTexture = nullptr;
-    std::array<WGPUTextureView, CASCADE_COUNT> shadowDepthTextureViews;
+    std::array<WGPUTextureView, CASCADE_COUNT> shadowDepthTextureViews{};
     WGPUTextureView shadowDepthTextureArrayView = nullptr;
     WGPUSampler shadowSampler = nullptr;
     WGPUBindGroupLayout shadowBindGroupLayout = nullptr;
@@ -214,23 +218,23 @@ struct FlyCamera : public Camera {
     float pitch = 0.0f;
     float yaw = 0.0f;
 
-    void MoveForward(float delta)
+    void MoveForward(const float delta)
     {
         position += glm::normalize(glm::vec3(rotation.x, rotation.y, rotation.z)) * delta;
     }
 
-    void MoveRight(float delta)
+    void MoveRight(const float delta)
     {
         position += glm::normalize(glm::cross(rotation, up)) * delta;
     }
 
-    void AdjustPitch(float delta)
+    void AdjustPitch(const float delta)
     {
         pitch = std::clamp<float>(pitch - delta * glm::radians(CAMERA_SPEED), -glm::radians(89.0f), glm::radians(89.0f));
         UpdateRotation();
     }
 
-    void AdjustYaw(float delta)
+    void AdjustYaw(const float delta)
     {
         yaw += delta * glm::radians(CAMERA_SPEED);
         UpdateRotation();
@@ -280,6 +284,7 @@ WGPUTextureFormat ChooseSurfaceFormat(const WGPUSurfaceCapabilities &caps)
     return caps.formatCount > 0 ? caps.formats[0] : WGPUTextureFormat_BGRA8Unorm;
 }
 
+#ifdef TRIANGLE_SAMPLE
 bool EnsureRotationResources(GpuState &gpu)
 {
     if (gpu.rotationUniformBuffer && gpu.rotationBindGroupLayout && gpu.rotationBindGroup && gpu.pipelineLayout) {
@@ -411,7 +416,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .nextInChain = &wgslSource.chain,
     };
 
-    const WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(gpu.device, &shaderDesc);
+    WGPUShaderModule shaderModule = wgpuDeviceCreateShaderModule(gpu.device, &shaderDesc);
     if (!shaderModule) {
         return nullptr;
     }
@@ -448,10 +453,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .fragment = &fragmentState,
     };
 
-    const WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
+    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
     wgpuShaderModuleRelease(shaderModule);
     return pipeline;
 }
+#endif
 
 bool CreateSurfaceFromWindow(WGPUInstance instance, SDL_Window *window, WGPUSurface *outSurface)
 {
@@ -523,6 +529,7 @@ void ReleaseGpu(GpuState &gpu)
         wgpuBindGroupLayoutRelease(gpu.defaultSamplerBindGroupLayout);
         gpu.defaultSamplerBindGroupLayout = nullptr;
     }
+#ifdef TRIANGLE_SAMPLE
     if (gpu.pipeline) {
         wgpuRenderPipelineRelease(gpu.pipeline);
         gpu.pipeline = nullptr;
@@ -543,6 +550,7 @@ void ReleaseGpu(GpuState &gpu)
         wgpuBufferRelease(gpu.rotationUniformBuffer);
         gpu.rotationUniformBuffer = nullptr;
     }
+#endif
     if (gpu.surface) {
         wgpuSurfaceRelease(gpu.surface);
         gpu.surface = nullptr;
@@ -657,6 +665,7 @@ bool ConfigureSurface(AppState &app)
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
 
+#ifdef TRIANGLE_SAMPLE
     if (!EnsureRotationResources(app.gpu)) {
         std::cerr << "Failed to initialize rotation resources\n";
         return false;
@@ -668,11 +677,11 @@ bool ConfigureSurface(AppState &app)
     }
     app.gpu.pipeline = CreateTrianglePipeline(app.gpu, app.gpu.surfaceConfig.format);
     return app.gpu.pipeline != nullptr;
+#endif
+    return true;
 }
 
 std::array<glm::vec3, 8> BuildCascadeFrustumCorners(const AppState &app, const float nearDist, const float farDist) {
-    std::array<glm::vec3, 8> corners;
-
     const float aspect = static_cast<float>(app.gpu.width) / static_cast<float>(app.gpu.height);
     const float halfFovTan = tan(flyCamera.fov * 0.5f);
 
@@ -688,19 +697,21 @@ std::array<glm::vec3, 8> BuildCascadeFrustumCorners(const AppState &app, const f
     const float farHalfHeight = farDist * halfFovTan;
     const float farHalfWidth = farHalfHeight * aspect;
 
-    corners[0] = nearCenter - right * nearHalfWidth + up * nearHalfHeight;
-    corners[1] = nearCenter + right * nearHalfWidth + up * nearHalfHeight;
-    corners[2] = nearCenter + right * nearHalfWidth - up * nearHalfHeight;
-    corners[3] = nearCenter - right * nearHalfWidth - up * nearHalfHeight;
-    corners[4] = farCenter - right * farHalfWidth + up * farHalfHeight;
-    corners[5] = farCenter + right * farHalfWidth + up * farHalfHeight;
-    corners[6] = farCenter + right * farHalfWidth - up * farHalfHeight;
-    corners[7] = farCenter - right * farHalfWidth - up * farHalfHeight;
+    const std::array corners = {
+        nearCenter - right * nearHalfWidth + up * nearHalfHeight,
+        nearCenter + right * nearHalfWidth + up * nearHalfHeight,
+        nearCenter + right * nearHalfWidth - up * nearHalfHeight,
+        nearCenter - right * nearHalfWidth - up * nearHalfHeight,
+        farCenter - right * farHalfWidth + up * farHalfHeight,
+        farCenter + right * farHalfWidth + up * farHalfHeight,
+        farCenter + right * farHalfWidth - up * farHalfHeight,
+        farCenter - right * farHalfWidth - up * farHalfHeight,
+    };
     return corners;
 }
 
 std::array<float, CASCADE_COUNT> CalculateCascadeSplits() {
-    std::array<float, CASCADE_COUNT> splits;
+    std::array<float, CASCADE_COUNT> splits{};
 
     const float nearPlane = flyCamera.nearPlane;
     const float farPlane = flyCamera.farPlane;
@@ -769,7 +780,7 @@ void UpdateCascadeData(const AppState &app) {
     }
 }
 
-void RenderObjects(const WGPURenderPassEncoder pass) {
+void RenderObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
 
@@ -797,7 +808,7 @@ void RenderObjects(const WGPURenderPassEncoder pass) {
     }
 }
 
-void RenderShadowObjects(const WGPURenderPassEncoder pass) {
+void RenderShadowObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
 
@@ -833,6 +844,7 @@ bool DrawFrame(AppState &app)
         return ConfigureSurface(app);
     }
 
+#ifdef TRIANGLE_SAMPLE
     RotationUniform rotation {
         .angle = static_cast<float>(SDL_GetTicks()) * 0.0015f,
     };
@@ -843,6 +855,7 @@ bool DrawFrame(AppState &app)
         &rotation,
         sizeof(rotation)
     );
+#endif
 
     WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
     if (!view) {
@@ -975,14 +988,15 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
-    // Test triangle to make sure everything is still working
-    // passDesc.depthStencilAttachment = nullptr;
-    // pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    // wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
-    // wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
-    // wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
-    // wgpuRenderPassEncoderEnd(pass);
-    // wgpuRenderPassEncoderRelease(pass);
+#ifdef TRIANGLE_SAMPLE
+    passDesc.depthStencilAttachment = nullptr;
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
+    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+#endif
 
     WGPUCommandBuffer commandBuffer = wgpuCommandEncoderFinish(encoder, nullptr);
     if (!commandBuffer) {
@@ -1200,8 +1214,8 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
         return {};
     }
 
-    const uint32_t width = static_cast<uint32_t>(convertedSurface->w);
-    const uint32_t height = static_cast<uint32_t>(convertedSurface->h);
+    const auto width = static_cast<uint32_t>(convertedSurface->w);
+    const auto height = static_cast<uint32_t>(convertedSurface->h);
 
     const WGPUTextureDescriptor textureDesc {
         .label = {filepath.c_str(), WGPU_STRLEN},
