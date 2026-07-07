@@ -132,5 +132,6 @@ fn fs_main(
     let lambertian_factor = max(dot(light_dir, in.world_normal), 0.0);
     let lighting_factor = min(ambient_color + visibility * lambertian_factor, 1.0);
 
-    return vec4<f32>(lighting_factor * result_color * cascade_colour_modulator[cascade_idx], object_color.a);
+//    return vec4<f32>(lighting_factor * result_color * cascade_colour_modulator[cascade_idx], object_color.a);
+    return vec4<f32>(lighting_factor * result_color, object_color.a);
 }

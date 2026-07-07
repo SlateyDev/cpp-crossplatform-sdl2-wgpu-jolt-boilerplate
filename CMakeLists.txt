@@ -44,6 +44,8 @@ target_link_libraries(wgpu_jolt_app PRIVATE glm::glm)
 if(MSVC)
     set_property(TARGET wgpu_jolt_app PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(wgpu_jolt_app PRIVATE $<$<CONFIG:Debug>:/Zi /Od>)
+    target_link_options(wgpu_jolt_app PRIVATE $<$<CONFIG:Debug>:/DEBUG>)
 endif()
 
 if(EMSCRIPTEN)

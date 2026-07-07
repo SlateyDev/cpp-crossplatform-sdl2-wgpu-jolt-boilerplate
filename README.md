@@ -63,6 +63,16 @@ python -m http.server -d build/wasm-debug 8000
 
 Then open `http://localhost:8000/wgpu_jolt_app.html`.
 
+## Fly camera controls
+
+- **W / A / S / D**: Move forward / left / back / right
+- **Q / E**: Move down / up
+- **Shift**: Move faster
+- **Mouse move**: Look around (mouse-look)
+- **Tab**: Toggle mouse-look mode
+- **Esc**: Exit mouse-look mode
+- **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
+
 ## Other build presets
 
 ```bash

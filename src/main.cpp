@@ -196,6 +196,7 @@ std::unordered_map<std::string, Mesh> meshes;
 std::unordered_map<std::string, UnlitMaterial> materials;
 
 std::vector<MeshInstance> objects;
+std::vector<MeshInstance*> objects;
 
 MeshInstance gameObject1;
 MeshInstance gameObject2;
@@ -213,6 +214,8 @@ struct Camera {
 };
 
 constexpr float CAMERA_SPEED = 0.3f;
+constexpr float CAMERA_MOVE_SPEED = 4.0f;
+constexpr float CAMERA_MOVE_BOOST = 3.0f;
 
 struct FlyCamera : public Camera {
     float pitch = 0.0f;
@@ -226,6 +229,11 @@ struct FlyCamera : public Camera {
     void MoveRight(const float delta)
     {
         position += glm::normalize(glm::cross(rotation, up)) * delta;
+    }
+
+    void MoveVertical(const float delta)
+    {
+        position += -glm::normalize(up) * delta;
     }
 
     void AdjustPitch(const float delta)
@@ -259,6 +267,11 @@ struct AppState {
     SDL_Window *window = nullptr;
     GpuState gpu;
     bool running = true;
+    bool mouseLookEnabled = false;
+    float mouseDeltaX = 0.0f;
+    float mouseDeltaY = 0.0f;
+    float frameDeltaSeconds = 1.0f / 60.0f;
+    Uint64 lastFrameCounter = 0;
 };
 
 WGPUStringView ToWgpuString(const char *text)
@@ -782,9 +795,9 @@ void UpdateCascadeData(const AppState &app) {
 
 void RenderObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
-        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
-        auto it = meshes.find(obj.meshName);
+        auto it = meshes.find(obj->meshName);
 
         if (it != meshes.end()) {
             const Mesh& mesh = it->second;
@@ -810,9 +823,9 @@ void RenderObjects(WGPURenderPassEncoder pass) {
 
 void RenderShadowObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
-        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj.uniformBindGroup, 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
-        auto it = meshes.find(obj.meshName);
+        auto it = meshes.find(obj->meshName);
 
         if (it != meshes.end()) {
             const Mesh& mesh = it->second;
@@ -863,8 +876,9 @@ bool DrawFrame(AppState &app)
         return false;
     }
 
-    gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks())) * 1.2f, 0.0f));
-    gameObject1.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()), 0.0f));
+    gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
+    // gameObject2.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
+    // gameObject3.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
 
     const auto forward = glm::normalize(flyCamera.rotation);
     app.gpu.viewMatrix = glm::lookAt(
@@ -890,9 +904,9 @@ bool DrawFrame(AppState &app)
     );
 
     for (auto &object : objects) {
-        auto modelMatrix = glm::translate(glm::mat4(1.0f), object.translation)
-                         * glm::mat4_cast(object.rotation)
-                         * glm::scale(glm::mat4(1.0f), object.scale);
+        auto modelMatrix = glm::translate(glm::mat4(1.0f), object->translation)
+                         * glm::mat4_cast(object->rotation)
+                         * glm::scale(glm::mat4(1.0f), object->scale);
         auto normalMatrix = glm::transpose(glm::inverse(modelMatrix));
         ModelMatrixUniform modelMatrices{
             .modelMatrix = modelMatrix,
@@ -900,7 +914,7 @@ bool DrawFrame(AppState &app)
         };
         wgpuQueueWriteBuffer(
             app.gpu.queue,
-            object.uniformBuffer,
+            object->uniformBuffer,
             0,
             &modelMatrices,
             sizeof(ModelMatrixUniform)
@@ -967,8 +981,8 @@ bool DrawFrame(AppState &app)
         .depthLoadOp = WGPULoadOp_Clear,
         .depthStoreOp = WGPUStoreOp_Store,
         .depthClearValue = 1.0f,
-        .stencilLoadOp = WGPULoadOp_Clear,
-        .stencilStoreOp = WGPUStoreOp_Store,
+        .stencilLoadOp = WGPULoadOp_Undefined,
+        .stencilStoreOp = WGPUStoreOp_Undefined,
         .stencilClearValue = 0,
         .stencilReadOnly = true,
     };
@@ -1152,19 +1166,102 @@ void PumpEvents(AppState &app)
             app.running = false;
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             ConfigureSurface(app);
+        } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            app.mouseLookEnabled = false;
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+        } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT && !app.mouseLookEnabled) {
+            if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+                app.mouseLookEnabled = true;
+            } else {
+                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+            }
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
+            const bool enableMouseLook = !app.mouseLookEnabled;
+            if (!enableMouseLook || SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+                app.mouseLookEnabled = enableMouseLook;
+            } else {
+                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+            }
+            if (!enableMouseLook) {
+                SDL_SetRelativeMouseMode(SDL_FALSE);
+            }
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+            app.mouseLookEnabled = false;
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+        } else if (ev.type == SDL_MOUSEMOTION && app.mouseLookEnabled) {
+            app.mouseDeltaX += static_cast<float>(ev.motion.xrel);
+            app.mouseDeltaY += static_cast<float>(ev.motion.yrel);
         }
     }
+}
+
+void UpdateFrameTiming(AppState &app)
+{
+    const Uint64 now = SDL_GetPerformanceCounter();
+    if (app.lastFrameCounter == 0) {
+        app.lastFrameCounter = now;
+        app.frameDeltaSeconds = 1.0f / 60.0f;
+        return;
+    }
+
+    const Uint64 elapsed = now - app.lastFrameCounter;
+    app.lastFrameCounter = now;
+    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    app.frameDeltaSeconds = static_cast<float>(static_cast<double>(elapsed) / frequency);
+    app.frameDeltaSeconds = std::clamp(app.frameDeltaSeconds, 0.0f, 0.1f);
+}
+
+void UpdateCameraFromInput(AppState &app)
+{
+    const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
+    float moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
+    if (keyboardState[SDL_SCANCODE_LSHIFT] || keyboardState[SDL_SCANCODE_RSHIFT]) {
+        moveDelta *= CAMERA_MOVE_BOOST;
+    }
+
+    if (keyboardState[SDL_SCANCODE_W]) {
+        flyCamera.MoveForward(moveDelta);
+    }
+    if (keyboardState[SDL_SCANCODE_S]) {
+        flyCamera.MoveForward(-moveDelta);
+    }
+    if (keyboardState[SDL_SCANCODE_A]) {
+        flyCamera.MoveRight(moveDelta);
+    }
+    if (keyboardState[SDL_SCANCODE_D]) {
+        flyCamera.MoveRight(-moveDelta);
+    }
+    if (keyboardState[SDL_SCANCODE_E]) {
+        flyCamera.MoveVertical(moveDelta);
+    }
+    if (keyboardState[SDL_SCANCODE_Q]) {
+        flyCamera.MoveVertical(-moveDelta);
+    }
+
+    if (app.mouseLookEnabled) {
+        if (app.mouseDeltaX != 0.0f) {
+            flyCamera.AdjustYaw(app.mouseDeltaX);
+        }
+        if (app.mouseDeltaY != 0.0f) {
+            flyCamera.AdjustPitch(app.mouseDeltaY);
+        }
+    }
+
+    app.mouseDeltaX = 0.0f;
+    app.mouseDeltaY = 0.0f;
 }
 
 #if defined(__EMSCRIPTEN__)
 void WasmMainLoop(void *userdata)
 {
     auto *app = static_cast<AppState *>(userdata);
+    UpdateFrameTiming(*app);
     PumpEvents(*app);
     if (!app->running) {
         emscripten_cancel_main_loop();
         return;
     }
+    UpdateCameraFromInput(*app);
     DrawFrame(*app);
 }
 #endif
@@ -1206,7 +1303,7 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
     }
     std::cout << "Loaded texture: " << filepath << " - dimensions: " << surface->w << "x" << surface->h << std::endl;
 
-    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA8888, 0);
+    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_BGRA32, 0);
     SDL_FreeSurface(surface);
 
     if (!convertedSurface) {
@@ -1222,7 +1319,7 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
         .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
         .dimension = WGPUTextureDimension_2D,
         .size = {width, height, 1},
-        .format = WGPUTextureFormat_RGBA8Unorm,
+        .format = WGPUTextureFormat_BGRA8Unorm,
         .mipLevelCount = 1,
         .sampleCount = 1,
     };
@@ -1309,13 +1406,13 @@ int main()
     gameObject2.scale = glm::vec3(1.0f, 1.0f, 1.0f);
 
     gameObject3.meshName = "plane";
-    gameObject3.translation = glm::vec3(0.0f, -1.0f, 0.0f);
-    gameObject3.rotation = glm::quat(glm::vec3(0.0f, 0.0f, -0.5f * glm::pi<float>()));
+    gameObject3.translation = glm::vec3(0.0f, -4.0f, 0.0f);
+    gameObject3.rotation = glm::quat(glm::vec3(-0.5f * glm::pi<float>(), 0.0f, 0.0f));
     gameObject3.scale = glm::vec3(40.0f, 40.0f, 40.0f);
 
-    objects.push_back(gameObject1);
+    objects.push_back(&gameObject1);
     // objects.push_back(gameObject2);
-    objects.push_back(gameObject3);
+    objects.push_back(&gameObject3);
 
     SDL_SetMainReady();
 
@@ -1347,6 +1444,11 @@ int main()
         return 1;
     }
     std::cout << "SDL window created\n";
+    if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+        app.mouseLookEnabled = true;
+    } else {
+        std::cerr << "Mouse-look mode will activate after clicking in the window: " << SDL_GetError() << '\n';
+    }
 
     if (!InitializeGraphics(app)) {
         ReleaseGpu(app.gpu);
@@ -1401,19 +1503,19 @@ int main()
     app.gpu.meshBindGroupLayout = wgpuDeviceCreateBindGroupLayout(app.gpu.device, &meshBindGroupLayoutDesc);
 
     for (auto &object : objects) {
-        std::cout << "Creating uniform buffer for object with mesh: " << object.meshName << "\n";
+        std::cout << "Creating uniform buffer for object with mesh: " << object->meshName << "\n";
         WGPUBufferDescriptor uniformBufferDesc{
             .label = ToWgpuString("Mesh Uniform Buffer"),
             .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
             .size = sizeof(ModelMatrixUniform),
         };
-        object.uniformBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &uniformBufferDesc);
+        object->uniformBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &uniformBufferDesc);
 
-        std::cout << "Creating bind group for object with mesh: " << object.meshName << "\n";
+        std::cout << "Creating bind group for object with mesh: " << object->meshName << "\n";
         const auto meshBindGroupEntries = std::to_array<WGPUBindGroupEntry>({
             WGPUBindGroupEntry{
                 .binding = 0,
-                .buffer = object.uniformBuffer,
+                .buffer = object->uniformBuffer,
                 .size = sizeof(ModelMatrixUniform),
             }
         });
@@ -1423,7 +1525,7 @@ int main()
             .entryCount = static_cast<uint32_t>(meshBindGroupEntries.size()),
             .entries = meshBindGroupEntries.data(),
         };
-        object.uniformBindGroup = wgpuDeviceCreateBindGroup(app.gpu.device, &meshBindGroupDesc);
+        object->uniformBindGroup = wgpuDeviceCreateBindGroup(app.gpu.device, &meshBindGroupDesc);
     }
 
     app.gpu.sceneBindGroupLayout = [&] {
@@ -1793,10 +1895,12 @@ int main()
     return 0;
 #else
     while (app.running) {
+        UpdateFrameTiming(app);
         PumpEvents(app);
         if (!app.running) {
             break;
         }
+        UpdateCameraFromInput(app);
         if (!DrawFrame(app)) {
             std::cerr << "DrawFrame failed\n";
             break;
