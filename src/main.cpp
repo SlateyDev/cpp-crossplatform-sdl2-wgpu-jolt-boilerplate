@@ -195,7 +195,6 @@ std::unordered_map<std::string, Mesh> meshes;
 
 std::unordered_map<std::string, UnlitMaterial> materials;
 
-std::vector<MeshInstance> objects;
 std::vector<MeshInstance*> objects;
 
 MeshInstance gameObject1;
