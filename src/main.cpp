@@ -122,10 +122,11 @@ struct alignas(16) ModelMatrixUniform {
 constexpr uint32_t CASCADE_COUNT = 4;
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
-constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(1.0, 0.0, 0.0, 0.0,
+constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(
+    1.0, 0.0, 0.0, 0.0,
     0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.5,
-    0.0, 0.0, 0.0, 1.0);
+    0.0, 0.0, 0.5, 0.0,
+    0.0, 0.0, 0.5, 1.0);
 
 struct alignas(16) LightUniform {
     struct alignas(16) Cascade {
@@ -585,6 +586,49 @@ void ReleaseGpu(GpuState &gpu)
     }
 }
 
+void CreateDepthTexture(AppState &app)
+{
+    if (app.gpu.depthTexture) {
+        std::cout << "Releasing existing depth texture" << std::endl;
+        wgpuTextureRelease(app.gpu.depthTexture);
+        app.gpu.depthTexture = nullptr;
+    }
+    std::cout << "Creating depth texture of size: " << app.gpu.surfaceConfig.width << "x" << app.gpu.surfaceConfig.height << std::endl;
+    app.gpu.depthTexture = [&] {
+        const WGPUTextureDescriptor depthDesc {
+            .label = ToWgpuString("Depth Texture"),
+            .usage = WGPUTextureUsage_RenderAttachment,
+            .dimension = WGPUTextureDimension_2D,
+            .size = {app.gpu.surfaceConfig.width, app.gpu.surfaceConfig.height, 1},
+            .format = DEPTH_FORMAT,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+            .viewFormatCount = 0,
+        };
+        return wgpuDeviceCreateTexture(app.gpu.device, &depthDesc);
+    }();
+
+    if (app.gpu.depthTextureView) {
+        std::cout << "Releasing existing depth texture view" << std::endl;
+        wgpuTextureViewRelease(app.gpu.depthTextureView);
+        app.gpu.depthTextureView = nullptr;
+    }
+    std::cout << "Creating depth texture view" << std::endl;
+    app.gpu.depthTextureView = [&] {
+        const WGPUTextureViewDescriptor viewDesc {
+            .label = ToWgpuString("Depth Texture View"),
+            .format = DEPTH_FORMAT,
+            .dimension = WGPUTextureViewDimension_2D,
+            .baseMipLevel = 0,
+            .mipLevelCount = 1,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = 1,
+            .aspect = WGPUTextureAspect_DepthOnly,
+        };
+        return wgpuTextureCreateView(app.gpu.depthTexture, &viewDesc);
+    }();
+}
+
 bool ConfigureSurface(AppState &app)
 {
     int width = 0;
@@ -610,6 +654,8 @@ bool ConfigureSurface(AppState &app)
     };
     wgpuSurfaceConfigure(app.gpu.surface, &app.gpu.surfaceConfig);
     wgpuSurfaceCapabilitiesFreeMembers(caps);
+
+    CreateDepthTexture(app);
 
     app.gpu.defaultSampler = [&] {
         WGPUSamplerDescriptor samplerDesc = {
@@ -1353,49 +1399,6 @@ std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue 
     return {texture, wgpuTextureCreateView(texture, nullptr)};
 }
 
-void CreateDepthTexture(AppState &app)
-{
-    if (app.gpu.depthTexture) {
-        std::cout << "Releasing existing depth texture" << std::endl;
-        wgpuTextureRelease(app.gpu.depthTexture);
-        app.gpu.depthTexture = nullptr;
-    }
-    std::cout << "Creating depth texture of size: " << app.gpu.surfaceConfig.width << "x" << app.gpu.surfaceConfig.height << std::endl;
-    app.gpu.depthTexture = [&] {
-        const WGPUTextureDescriptor depthDesc {
-            .label = ToWgpuString("Depth Texture"),
-            .usage = WGPUTextureUsage_RenderAttachment,
-            .dimension = WGPUTextureDimension_2D,
-            .size = {app.gpu.surfaceConfig.width, app.gpu.surfaceConfig.height, 1},
-            .format = DEPTH_FORMAT,
-            .mipLevelCount = 1,
-            .sampleCount = 1,
-            .viewFormatCount = 0,
-        };
-        return wgpuDeviceCreateTexture(app.gpu.device, &depthDesc);
-    }();
-
-    if (app.gpu.depthTextureView) {
-        std::cout << "Releasing existing depth texture view" << std::endl;
-        wgpuTextureViewRelease(app.gpu.depthTextureView);
-        app.gpu.depthTextureView = nullptr;
-    }
-    std::cout << "Creating depth texture view" << std::endl;
-    app.gpu.depthTextureView = [&] {
-        const WGPUTextureViewDescriptor viewDesc {
-            .label = ToWgpuString("Depth Texture View"),
-            .format = DEPTH_FORMAT,
-            .dimension = WGPUTextureViewDimension_2D,
-            .baseMipLevel = 0,
-            .mipLevelCount = 1,
-            .baseArrayLayer = 0,
-            .arrayLayerCount = 1,
-            .aspect = WGPUTextureAspect_DepthOnly,
-        };
-        return wgpuTextureCreateView(app.gpu.depthTexture, &viewDesc);
-    }();
-}
-
 int main()
 {
     IMG_Init(IMG_INIT_PNG);
@@ -1731,8 +1734,6 @@ int main()
         };
         return wgpuDeviceCreatePipelineLayout(app.gpu.device, &desc);
     }();
-
-    CreateDepthTexture(app);
 
     std::cout << "Creating forward renderer pipeline\n";
     pipelines["forwardRenderer"] = [&] {
