@@ -740,11 +740,11 @@ std::array<float, CASCADE_COUNT> CalculateCascadeSplits() {
 
 void UpdateCascadeData(const AppState &app) {
     const auto splits = CalculateCascadeSplits();
-    const auto lightDir = glm::vec3(glm::normalize(-directionalLight.position));
+    const auto lightDir = glm::normalize(-glm::vec3(directionalLight.position));
 
-    for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
-        const float cascadeNear = i == 0 ? flyCamera.nearPlane : splits[i - 1];
-        const float cascadeFar = splits[i];
+    for (auto i = 0; i < CASCADE_COUNT; ++i) {
+        const auto cascadeNear = i == 0 ? flyCamera.nearPlane : splits[i - 1];
+        const auto cascadeFar = splits[i];
         const auto corners = BuildCascadeFrustumCorners(app, cascadeNear, cascadeFar);
 
         glm::vec3 frustumCenter(0.0f);
@@ -783,12 +783,12 @@ void UpdateCascadeData(const AppState &app) {
         auto radius = std::max(std::max(std::abs(minX), std::abs(maxX)), std::max(std::abs(minY), std::abs(maxY)));
         radius = std::max(radius, std::max(std::abs(minZ), std::abs(maxZ))) + 10.0f;
 
-        auto lightPos = frustumCenter + lightDir * radius;
+        auto lightPos = frustumCenter - lightDir * radius;
         auto lightView = glm::lookAt(lightPos, frustumCenter, lightUp);
         auto lightProj = glm::ortho(-radius, radius, -radius, radius, -2.0f * radius, 2.0f * radius);
 
         directionalLight.cascades[i].viewProjectionMatrix = OPEN_GL_TO_WGPU_MATRIX * lightProj * lightView;
-        directionalLight.cascades[i].splitDepth = cascadeNear;
+        directionalLight.cascades[i].splitDepth = cascadeFar;
     }
 }
 
