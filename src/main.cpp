@@ -1174,6 +1174,12 @@ void PumpEvents(AppState &app)
             } else {
                 std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
             }
+        } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT && app.mouseLookEnabled) {
+            if (SDL_SetRelativeMouseMode(SDL_FALSE) == 0) {
+                app.mouseLookEnabled = false;
+            } else {
+                std::cerr << "Failed to disable mouse-look mode: " << SDL_GetError() << '\n';
+            }
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
             const bool enableMouseLook = !app.mouseLookEnabled;
             if (!enableMouseLook || SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
@@ -1443,11 +1449,6 @@ int main()
         return 1;
     }
     std::cout << "SDL window created\n";
-    if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
-        app.mouseLookEnabled = true;
-    } else {
-        std::cerr << "Mouse-look mode will activate after clicking in the window: " << SDL_GetError() << '\n';
-    }
 
     if (!InitializeGraphics(app)) {
         ReleaseGpu(app.gpu);
