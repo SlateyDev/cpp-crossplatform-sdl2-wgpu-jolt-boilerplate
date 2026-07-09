@@ -29,6 +29,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -37,6 +38,7 @@
 #include <thread>
 
 #include "mesh_instance.h"
+#include "gltf_loader.h"
 #include "primitive.h"
 #include <SDL_image.h>
 
@@ -922,7 +924,7 @@ bool DrawFrame(AppState &app)
     }
 
     gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
-    // gameObject2.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
+    gameObject2.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
     // gameObject3.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
 
     const auto forward = glm::normalize(flyCamera.rotation);
@@ -1409,9 +1411,9 @@ int main()
     gameObject1.scale = glm::vec3(1.0f, 1.0f, 1.0f);
 
     gameObject2.meshName = "duck";
-    gameObject2.translation = glm::vec3(-2.0f, -2.0f, 0.0f);
+    gameObject2.translation = glm::vec3(2.0f, -2.0f, 0.0f);
     gameObject2.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
-    gameObject2.scale = glm::vec3(1.0f, 1.0f, 1.0f);
+    gameObject2.scale = glm::vec3(100.0f, 100.0f, 100.0f);
 
     gameObject3.meshName = "plane";
     gameObject3.translation = glm::vec3(0.0f, -4.0f, 0.0f);
@@ -1473,6 +1475,21 @@ int main()
         Primitive::CreateFromPremadeData(app.gpu.device, planeVertices, planeIndices, "sample.png"),
     };
     meshes["plane"] = Mesh { .primitives = plane_primitives };
+
+    const std::string modelPath = "assets/BoomBox.gltf";
+    if (std::filesystem::exists(modelPath)) {
+        std::vector<Primitive> boomBoxPrimitives;
+        std::string loadError;
+        if (LoadGltfPrimitives(app.gpu.device, modelPath, "sample.png", boomBoxPrimitives, loadError)) {
+            meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
+            objects.push_back(&gameObject2);
+            std::cout << "Loaded glTF model: " << modelPath << "\n";
+        } else {
+            std::cerr << "Failed to load glTF model: " << modelPath << " error: " << loadError << "\n";
+        }
+    } else {
+        std::cout << "BoomBox glTF not found, skipping: " << modelPath << "\n";
+    }
 
     WGPUBufferDescriptor lightUniformBufferDesc {
         .label = ToWgpuString("Light Uniform Buffer"),

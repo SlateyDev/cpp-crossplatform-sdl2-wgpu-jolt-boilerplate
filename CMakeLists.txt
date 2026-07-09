@@ -39,7 +39,28 @@ if(NOT TARGET glm::glm)
     target_include_directories(glm_headers INTERFACE ${glm_SOURCE_DIR})
 endif()
 
+if(WGPU_JOLT_USE_SYSTEM_DEPS)
+    find_path(CGLTF_INCLUDE_DIR cgltf.h)
+endif()
+
+if(NOT CGLTF_INCLUDE_DIR)
+    FetchContent_Declare(
+        cgltf
+        GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+        GIT_TAG v1.14
+        GIT_SHALLOW TRUE
+    )
+
+    FetchContent_GetProperties(cgltf)
+    if(NOT cgltf_POPULATED)
+        FetchContent_Populate(cgltf)
+    endif()
+
+    set(CGLTF_INCLUDE_DIR ${cgltf_SOURCE_DIR})
+endif()
+
 target_link_libraries(wgpu_jolt_app PRIVATE glm::glm)
+target_include_directories(wgpu_jolt_app PRIVATE ${CGLTF_INCLUDE_DIR})
 
 if(MSVC)
     set_property(TARGET wgpu_jolt_app PROPERTY
