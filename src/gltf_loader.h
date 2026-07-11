@@ -1,16 +1,21 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <webgpu/webgpu.h>
+#include <iostream>
 
 #include "primitive.h"
+#include "structures.h"
+
+std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath);
 
 bool LoadGltfPrimitives(
-    WGPUDevice device,
+    const GpuState &gpuState,
     const std::string &gltfPath,
-    const std::string &materialKey,
+    std::unordered_map<std::string, UnlitMaterial> &materials,
     std::vector<Primitive> &outPrimitives,
     std::string &outError
 );

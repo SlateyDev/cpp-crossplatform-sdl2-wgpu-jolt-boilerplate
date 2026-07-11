@@ -2,10 +2,67 @@
 #include <cgltf.h>
 
 #include "gltf_loader.h"
+#include "structures.h"
 
+#include <SDL.h>
+#include <SDL_image.h>
+
+#include <array>
 #include <climits>
-#include <cstdint>
 #include <vector>
+
+std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath) {
+    SDL_Surface* surface = IMG_Load(("./assets/" + filepath).c_str());
+    if (!surface) {
+        std::cerr << "Failed to load image: " << filepath << " Error: " << IMG_GetError() << std::endl;
+        return {};
+    }
+    std::cout << "Loaded texture: " << filepath << " - dimensions: " << surface->w << "x" << surface->h << std::endl;
+
+    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_BGRA32, 0);
+    SDL_FreeSurface(surface);
+
+    if (!convertedSurface) {
+        std::cerr << "Failed to convert surface format for: " << filepath << " Error: " << SDL_GetError() << std::endl;
+        return {};
+    }
+
+    const auto width = static_cast<uint32_t>(convertedSurface->w);
+    const auto height = static_cast<uint32_t>(convertedSurface->h);
+
+    const WGPUTextureDescriptor textureDesc {
+        .label = {filepath.c_str(), WGPU_STRLEN},
+        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
+        .dimension = WGPUTextureDimension_2D,
+        .size = {width, height, 1},
+        .format = WGPUTextureFormat_BGRA8Unorm,
+        .mipLevelCount = 1,
+        .sampleCount = 1,
+    };
+    WGPUTexture texture = wgpuDeviceCreateTexture(gpuState.device, &textureDesc);
+
+    const WGPUTexelCopyTextureInfo destination {
+        .texture = texture,
+        .mipLevel = 0,
+        .origin = {0, 0, 0},
+        .aspect = WGPUTextureAspect_All,
+    };
+    const WGPUTexelCopyBufferLayout dataLayout {
+        .offset = 0,
+        .bytesPerRow = static_cast<uint32_t>(convertedSurface->pitch),
+        .rowsPerImage = height,
+    };
+    const WGPUExtent3D writeSize {
+        .width = width,
+        .height = height,
+        .depthOrArrayLayers = 1,
+    };
+    wgpuQueueWriteTexture(gpuState.queue, &destination, convertedSurface->pixels, convertedSurface->pitch * height, &dataLayout, &writeSize);
+
+    SDL_FreeSurface(convertedSurface);
+
+    return {texture, wgpuTextureCreateView(texture, nullptr)};
+}
 
 namespace {
 
@@ -111,9 +168,9 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
 } // namespace
 
 bool LoadGltfPrimitives(
-    WGPUDevice device,
+    const GpuState &gpuState,
     const std::string &gltfPath,
-    const std::string &materialKey,
+    std::unordered_map<std::string, UnlitMaterial> &materials,
     std::vector<Primitive> &outPrimitives,
     std::string &outError
 )
@@ -213,7 +270,48 @@ bool LoadGltfPrimitives(
                 };
             }
 
-            parsedPrimitives.push_back(Primitive::CreateFromPremadeData(device, vertices, indices, materialKey));
+            if (primitive.material->pbr_metallic_roughness.base_color_texture.texture == nullptr) {
+                parsedPrimitives.push_back(Primitive::CreateFromPremadeData(gpuState.device, vertices, indices, "sample.png"));
+            } else {
+                parsedPrimitives.push_back(Primitive::CreateFromPremadeData(gpuState.device, vertices, indices, primitive.material->name));
+            }
+        }
+    }
+
+    for (cgltf_size materialIndex = 0; materialIndex < data->materials_count; ++materialIndex) {
+        const auto &material = data->materials[materialIndex];
+
+        if (material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
+            const auto [materialTexture, materialTextureView] = ::LoadImageTexture(gpuState, material.pbr_metallic_roughness.base_color_texture.texture->image->uri);
+
+            const auto bindGroupEntries = std::to_array<WGPUBindGroupEntry>({
+                {.binding = 0, .textureView = materialTextureView},
+                {.binding = 1, .sampler = gpuState.defaultSampler},
+                // {binding = 2, textureView = normalTextureView},
+                // {binding = 3, sampler = normalSampler},
+                // {binding = 4, textureView = metallicRoughnessTextureView},
+                // {binding = 5, sampler = metallicRoughnessSampler},
+                // {binding = 6, textureView = emissiveTextureView},
+                // {binding = 7, sampler = emissiveSampler},
+                // {binding = 8, textureView = occlusionTextureView},
+                // {binding = 9, sampler = occlusionSampler},
+            });
+            const WGPUBindGroupDescriptor bindGroupDesc {
+                .label = "Bind Group",
+                .layout = gpuState.defaultSamplerBindGroupLayout,
+                .entryCount = bindGroupEntries.size(),
+                .entries = bindGroupEntries.data(),
+            };
+
+            const auto newBindGroup = wgpuDeviceCreateBindGroup(
+                gpuState.device,
+                &bindGroupDesc);
+
+            materials[material.name] = UnlitMaterial{
+                .baseColorTexture = materialTexture,
+                .baseColorTextureView = materialTextureView,
+                .bindGroup = newBindGroup,
+            };
         }
     }
 

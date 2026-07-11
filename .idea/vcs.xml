@@ -2,9 +2,6 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/build/wasm-debug/_deps/joltphysics-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/build/wasm-release/_deps/joltphysics-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/build/wasm-relwithdebinfo/_deps/joltphysics-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/build/windows-debug/_deps/joltphysics-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/build/windows-debug/_deps/sdl2-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/build/windows-debug/_deps/sdl2_image-src" vcs="Git" />

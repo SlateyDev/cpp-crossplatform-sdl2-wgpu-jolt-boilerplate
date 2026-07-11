@@ -17,8 +17,6 @@
 #include <SDL_syswm.h>
 #endif
 
-// #define TRIANGLE_SAMPLE
-
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -40,6 +38,7 @@
 #include "mesh_instance.h"
 #include "gltf_loader.h"
 #include "primitive.h"
+#include "structures.h"
 #include <SDL_image.h>
 
 namespace {
@@ -109,19 +108,11 @@ private:
     std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
 };
 
-struct UnlitMaterial {
-    int id;
-    WGPUTexture baseColorTexture;
-    WGPUTextureView baseColorTextureView;
-    WGPUBindGroup bindGroup;
-};
-
 struct alignas(16) ModelMatrixUniform {
     glm::mat4 modelMatrix = glm::mat4(1.0f);
     glm::mat4 normalMatrix = glm::mat4(1.0f);
 };
 
-constexpr uint32_t CASCADE_COUNT = 4;
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
 constexpr auto OPEN_GL_TO_WGPU_MATRIX = glm::mat4(
@@ -144,43 +135,7 @@ struct alignas(16) CameraUniform {
     glm::vec4 forward = glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
 };
 
-struct GpuState {
-    WGPUInstance instance = nullptr;
-    WGPUAdapter adapter = nullptr;
-    WGPUDevice device = nullptr;
-    WGPUSurfaceConfiguration surfaceConfig{};
-    WGPUQueue queue = nullptr;
-    WGPUSurface surface = nullptr;
-#ifdef TRIANGLE_SAMPLE
-    WGPUBuffer rotationUniformBuffer = nullptr; //
-    WGPUBindGroupLayout rotationBindGroupLayout = nullptr; //
-    WGPUBindGroup rotationBindGroup = nullptr; //
-    WGPUPipelineLayout pipelineLayout = nullptr; //
-    WGPURenderPipeline pipeline = nullptr; //
-#endif
-    uint32_t width = 1280; //
-    uint32_t height = 720; //
 
-    WGPUSampler defaultSampler = nullptr;
-    WGPUBindGroupLayout defaultSamplerBindGroupLayout = nullptr;
-
-    glm::mat4 viewMatrix = glm::mat4(1.0f);
-    glm::mat4 projectionMatrix = glm::mat4(1.0f);
-
-    WGPUBuffer cameraUniformBuffer = nullptr;
-    WGPUBindGroupLayout meshBindGroupLayout = nullptr;
-    WGPUBuffer lightUniformBuffer = nullptr;
-    WGPUBindGroupLayout sceneBindGroupLayout = nullptr;
-    WGPUBindGroup sceneBindGroup = nullptr;
-    WGPUTexture shadowDepthTexture = nullptr;
-    std::array<WGPUTextureView, CASCADE_COUNT> shadowDepthTextureViews{};
-    WGPUTextureView shadowDepthTextureArrayView = nullptr;
-    WGPUSampler shadowSampler = nullptr;
-    WGPUBindGroupLayout shadowBindGroupLayout = nullptr;
-    WGPUBindGroup shadowBindGroup = nullptr;
-    WGPUTexture depthTexture = nullptr;
-    WGPUTextureView depthTextureView = nullptr;
-};
 
 auto directionalLightPosition = glm::vec3(50.0f, 100.0f, -100.0f);
 auto directionalLight = LightUniform{
@@ -263,17 +218,6 @@ FlyCamera flyCamera;
 
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
-};
-
-struct AppState {
-    SDL_Window *window = nullptr;
-    GpuState gpu;
-    bool running = true;
-    bool mouseLookEnabled = false;
-    float mouseDeltaX = 0.0f;
-    float mouseDeltaY = 0.0f;
-    float frameDeltaSeconds = 1.0f / 60.0f;
-    Uint64 lastFrameCounter = 0;
 };
 
 WGPUStringView ToWgpuString(const char *text)
@@ -1348,59 +1292,6 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
     return wgpuDeviceCreateShaderModule(device, &shaderDesc);
 }
 
-std::tuple<WGPUTexture, WGPUTextureView> LoadImage(WGPUDevice device, WGPUQueue queue, const std::string& filepath) {
-    SDL_Surface* surface = IMG_Load(filepath.c_str());
-    if (!surface) {
-        std::cerr << "Failed to load image: " << filepath << " Error: " << IMG_GetError() << std::endl;
-        return {};
-    }
-    std::cout << "Loaded texture: " << filepath << " - dimensions: " << surface->w << "x" << surface->h << std::endl;
-
-    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_BGRA32, 0);
-    SDL_FreeSurface(surface);
-
-    if (!convertedSurface) {
-        std::cerr << "Failed to convert surface format for: " << filepath << " Error: " << SDL_GetError() << std::endl;
-        return {};
-    }
-
-    const auto width = static_cast<uint32_t>(convertedSurface->w);
-    const auto height = static_cast<uint32_t>(convertedSurface->h);
-
-    const WGPUTextureDescriptor textureDesc {
-        .label = {filepath.c_str(), WGPU_STRLEN},
-        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
-        .dimension = WGPUTextureDimension_2D,
-        .size = {width, height, 1},
-        .format = WGPUTextureFormat_BGRA8Unorm,
-        .mipLevelCount = 1,
-        .sampleCount = 1,
-    };
-    WGPUTexture texture = wgpuDeviceCreateTexture(device, &textureDesc);
-
-    const WGPUTexelCopyTextureInfo destination {
-        .texture = texture,
-        .mipLevel = 0,
-        .origin = {0, 0, 0},
-        .aspect = WGPUTextureAspect_All,
-    };
-    const WGPUTexelCopyBufferLayout dataLayout {
-        .offset = 0,
-        .bytesPerRow = static_cast<uint32_t>(convertedSurface->pitch),
-        .rowsPerImage = height,
-    };
-    const WGPUExtent3D writeSize {
-        .width = width,
-        .height = height,
-        .depthOrArrayLayers = 1,
-    };
-    wgpuQueueWriteTexture(queue, &destination, convertedSurface->pixels, convertedSurface->pitch * height, &dataLayout, &writeSize);
-
-    SDL_FreeSurface(convertedSurface);
-
-    return {texture, wgpuTextureCreateView(texture, nullptr)};
-}
-
 int main()
 {
     IMG_Init(IMG_INIT_PNG);
@@ -1441,7 +1332,7 @@ int main()
 
     AppState app;
     app.window = SDL_CreateWindow(
-        "wgpu + SDL2 triangle",
+        "Sizzle Engine",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         1280,
@@ -1480,7 +1371,7 @@ int main()
     if (std::filesystem::exists(modelPath)) {
         std::vector<Primitive> boomBoxPrimitives;
         std::string loadError;
-        if (LoadGltfPrimitives(app.gpu.device, modelPath, "sample.png", boomBoxPrimitives, loadError)) {
+        if (LoadGltfPrimitives(app.gpu, modelPath, materials, boomBoxPrimitives, loadError)) {
             meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
             objects.push_back(&gameObject2);
             std::cout << "Loaded glTF model: " << modelPath << "\n";
@@ -1710,7 +1601,7 @@ int main()
     }();
 
     // Load sample.png using SDL2 as texture and create a bind group for it
-    auto [texture, textureView] = LoadImage(app.gpu.device, app.gpu.queue, "assets/sample.png");
+    auto [texture, textureView] = LoadImageTexture(app.gpu, "sample.png");
     materials["sample.png"] = UnlitMaterial{
         .id = 0,
         .baseColorTexture = texture,
