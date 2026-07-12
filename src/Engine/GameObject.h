@@ -5,8 +5,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "BaseObject.h"
-#include "Scene.h"
 #include "Transform.h"
+
+class Scene;
 
 class GameObject : public BaseObject {
     std::string name;
@@ -29,7 +30,7 @@ public:
 
     void SetWorldPositionAndRotation(glm::vec3& position, glm::quat& rotation);
 
-    static GameObject Instantiate(glm::vec3& position, glm::quat& rotation, GameObject* parent = nullptr);
+    static GameObject* Instantiate(const glm::vec3& position, const glm::quat& rotation, GameObject* parent = nullptr);
 
     template <std::derived_from<Component> T>
     T* AddComponent();

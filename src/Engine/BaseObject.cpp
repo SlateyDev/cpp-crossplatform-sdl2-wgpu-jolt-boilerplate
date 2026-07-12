@@ -1,5 +1,8 @@
 #include "BaseObject.h"
 
+#include "Component.h"
+#include "GameObject.h"
+
 GameObject* BaseObject::getParent() const {
     return parent;
 }
@@ -83,16 +86,16 @@ void BaseObject::setIsActive(const bool value) {
 void BaseObject::Destroy() {
     if (isDestroyed) return;
 
-    if (auto component = dynamic_cast<Component*>(this)) {
+    if (const auto component = dynamic_cast<Component*>(this)) {
         component->OnDestroy();
     //     Program.game.[Friend]scene.[Friend]objectsToCleanup.Add(component);
-    } else if (auto go = dynamic_cast<GameObject*>(this)) {
-        for (auto child : go->children) {
+    } else if (const auto go = dynamic_cast<GameObject*>(this)) {
+        for (const auto child : go->children) {
             child->Destroy();
         }
-        for (auto component : go->components) {
-            component->isDestroyed = true;
-            component->isActive = false;
+        for (const auto goComponent : go->components) {
+            goComponent->isDestroyed = true;
+            goComponent->isActive = false;
         }
     //     Program.game.[Friend]scene.[Friend]objectsToCleanup.Add(go);
     }

@@ -20,7 +20,7 @@ struct Frustum {
     };
 
 private:
-    glm::vec4 planes[FrustumPlanes::MAX];
+    glm::vec4 planes[static_cast<int>(FrustumPlanes::MAX)];
 
     static void NormalizePlanes(glm::vec4& plane) {
         plane /= glm::length(plane);

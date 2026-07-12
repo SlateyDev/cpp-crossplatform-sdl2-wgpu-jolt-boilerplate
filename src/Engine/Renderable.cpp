@@ -8,6 +8,6 @@ glm::mat4 Renderable::Transform() {
 }
 
 Renderable::BoundingSphere Renderable::GetBoundingSphere() {
-    auto go = gameObject;
+    // auto go = gameObject;
     return boundingSphere;
 }

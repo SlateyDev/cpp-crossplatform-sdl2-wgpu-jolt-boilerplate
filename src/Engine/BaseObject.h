@@ -3,8 +3,8 @@
 #include <concepts>
 #include <vector>
 
-#include "Component.h"
-#include "GameObject.h"
+class Component;
+class GameObject;
 
 class BaseObject {
     GameObject* parent = nullptr;

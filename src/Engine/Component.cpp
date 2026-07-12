@@ -1,5 +1,7 @@
 #include "Component.h"
 
+#include "GameObject.h"
+
 void Component::WakeInternal() {
     if (awakeCalled) return;
     if (!IsActiveInHierarchy()) return;

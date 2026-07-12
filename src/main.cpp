@@ -41,7 +41,12 @@
 #include "structures.h"
 #include <SDL_image.h>
 
+#include "Engine/GameObject.h"
+#include "Engine/Scene.h"
+
 namespace {
+
+Scene scene;
 
 void TraceImpl(const char *inFormat, ...)
 {
@@ -1294,6 +1299,7 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
 
 int main()
 {
+    auto player = GameObject::Instantiate(glm::vec3(2.0f, 0.0f, -2.0f), glm::identity<glm::quat>());
     IMG_Init(IMG_INIT_PNG);
 
     gameObject1.meshName = "cube";
