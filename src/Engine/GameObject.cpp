@@ -4,6 +4,7 @@
 
 #include "Component.h"
 #include "Scene.h"
+#include "SceneManager.h"
 
 void GameObject::setScene(Scene *scene) {
     this->scene = scene;
@@ -74,8 +75,7 @@ GameObject* GameObject::Instantiate(const glm::vec3 &position, const glm::quat &
     if (const auto scene = parent ? parent->getScene() : nullptr) {
         newGameObject->setScene(scene);
     } else {
-        //TODO: Don't create a new scene, get current scene
-        newGameObject->setScene(new Scene());
+        newGameObject->setScene(SceneManager::GetInstance().GetActiveScene());
     }
     newGameObject->getScene()->objectsInScene.push_back(newGameObject);
     return newGameObject;

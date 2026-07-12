@@ -42,11 +42,8 @@
 #include <SDL_image.h>
 
 #include "Engine/GameObject.h"
-#include "Engine/Scene.h"
 
 namespace {
-
-Scene scene;
 
 void TraceImpl(const char *inFormat, ...)
 {
