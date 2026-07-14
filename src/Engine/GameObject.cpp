@@ -26,6 +26,21 @@ void GameObject::WakeInternal() {
     }
 }
 
+GameObject::~GameObject()
+{
+    while (!children.empty()) {
+        const auto child = children.back();
+        children.pop_back();
+        delete child;
+    }
+    while (!components.empty()) {
+        const auto component = components.back();
+        components.pop_back();
+        component->OnDestroy();
+        delete component;
+    }
+}
+
 Scene* GameObject::getScene() const {
     return scene;
 }
@@ -72,7 +87,7 @@ GameObject* GameObject::Instantiate(const glm::vec3 &position, const glm::quat &
     if (parent) {
         parent->children.push_back(newGameObject);
     }
-    if (const auto scene = parent ? parent->getScene() : nullptr) {
+    if (const auto scene = parent ? parent->getScene() : SceneManager::GetInstance().GetActiveScene()) {
         newGameObject->setScene(scene);
     } else {
         newGameObject->setScene(SceneManager::GetInstance().GetActiveScene());
@@ -87,22 +102,23 @@ T* GameObject::AddComponent(){
     component->setParent(this);
     components.push_back(component);
 
-    if (scene != nullptr && scene->getIsActive() && isActive && component.isActive && !component.awakeCalled) {
+    if (scene != nullptr && scene->getIsActive() && getIsActive() && component.getIsActive() && !component.awakeCalled) {
         component.Awake();
         component.awakeCalled = true;
     }
     return component;
 }
 
-void GameObject::Update(const float dt) {
-    for (auto component = components.begin(); component != components.end(); ++component) {
-        if (!(*component)->startCalled && (*component)->getIsActive()) {
-            (*component)->startCalled = true;
-            (*component)->Start();
+void GameObject::Update(const float dt) const
+{
+    for (const auto component : components) {
+        if (!component->startCalled && component->getIsActive()) {
+            component->startCalled = true;
+            component->Start();
         }
-        (*component)->Update(dt);
+        component->Update(dt);
     }
-    for (auto child = children.begin(); child != children.end(); ++child) {
-        (*child)->Update(dt);
+    for (const auto child : children) {
+        child->Update(dt);
     }
 }

@@ -25,6 +25,8 @@ protected:
     void WakeInternal() override;
 
 public:
+    ~GameObject();
+
     Scene* getScene() const;
     bool IsActiveInHierarchy() override;
 
@@ -38,5 +40,5 @@ public:
     template <std::derived_from<Component> T>
     T* AddComponent();
 
-    void Update(float dt);
+    void Update(float dt) const;
 };
