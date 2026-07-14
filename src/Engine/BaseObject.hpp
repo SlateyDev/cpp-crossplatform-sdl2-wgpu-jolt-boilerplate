@@ -7,6 +7,9 @@ class Component;
 class GameObject;
 
 class BaseObject {
+    friend class Component;
+    friend class GameObject;
+
     GameObject* parent = nullptr;
     bool isActive = true;
     bool isDestroyed = false;
@@ -46,7 +49,4 @@ public:
     void Destroy();
 
     static void Destroy(BaseObject* obj);
-
-    friend class Component;
-    friend class GameObject;
 };

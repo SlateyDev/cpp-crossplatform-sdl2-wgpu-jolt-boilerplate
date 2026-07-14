@@ -10,6 +10,9 @@
 class Scene;
 
 class GameObject : public BaseObject {
+    friend class Scene;
+    friend class BaseObject;
+
     std::string name;
 
     Scene* scene = nullptr;
@@ -36,7 +39,4 @@ public:
     T* AddComponent();
 
     void Update(float dt);
-
-    friend class Scene;
-    friend class BaseObject;
 };

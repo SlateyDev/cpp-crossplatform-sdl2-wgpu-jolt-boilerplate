@@ -9,6 +9,8 @@ class GameObject;
 class Renderable;
 
 class Scene {
+    friend class GameObject;
+
     bool isActive = false;
 
     void setIsActive(const bool value);
@@ -29,6 +31,4 @@ public:
 
     void RefreshRenderables();
     void Render(Frustum& cameraFrustum, bool shadowRender = false) const;
-
-    friend class GameObject;
 };

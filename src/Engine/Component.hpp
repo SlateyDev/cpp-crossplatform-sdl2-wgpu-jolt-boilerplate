@@ -3,6 +3,8 @@
 #include "BaseObject.hpp"
 
 class Component : public BaseObject {
+    friend class GameObject;
+
     bool awakeCalled = false;
     bool startCalled = false;
 
@@ -22,6 +24,4 @@ public:
 
     virtual void OnDisable() {}
     virtual void OnDestroy() {}
-
-    friend class GameObject;
 };
