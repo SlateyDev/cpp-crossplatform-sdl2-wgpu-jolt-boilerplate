@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Renderable.h"
+#include "Renderable.hpp"
 
 class MeshRenderer : public Renderable {
     // Model* model;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BaseObject.h"
+#include "BaseObject.hpp"
 
 class Component : public BaseObject {
     bool awakeCalled = false;

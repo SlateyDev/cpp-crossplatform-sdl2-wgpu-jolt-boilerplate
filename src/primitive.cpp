@@ -1,4 +1,4 @@
-#include "primitive.h"
+#include "primitive.hpp"
 
 const std::vector<Vertex> boxVertices = {
     // Top face

@@ -4,8 +4,8 @@
 #include <glm/vec3.hpp>
 #include <glm/gtc/quaternion.hpp>
 
-#include "BaseObject.h"
-#include "Transform.h"
+#include "BaseObject.hpp"
+#include "Transform.hpp"
 
 class Scene;
 

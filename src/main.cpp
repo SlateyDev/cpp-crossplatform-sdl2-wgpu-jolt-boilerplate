@@ -16,6 +16,7 @@
 #if !defined(__EMSCRIPTEN__)
 #include <SDL_syswm.h>
 #endif
+#include <SDL_image.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -35,13 +36,12 @@
 #include <string>
 #include <thread>
 
-#include "mesh_instance.h"
-#include "gltf_loader.h"
-#include "primitive.h"
-#include "structures.h"
-#include <SDL_image.h>
+#include "mesh_instance.hpp"
+#include "gltf_loader.hpp"
+#include "primitive.hpp"
+#include "structures.hpp"
 
-#include "Engine/GameObject.h"
+#include "Engine/GameObject.hpp"
 
 namespace {
 

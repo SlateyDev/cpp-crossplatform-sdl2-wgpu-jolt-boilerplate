@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "Scene.h"
+#include "Scene.hpp"
 
 class SceneManager {
     SceneManager() = default;

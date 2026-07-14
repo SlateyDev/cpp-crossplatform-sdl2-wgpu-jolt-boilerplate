@@ -1,4 +1,4 @@
-#include "SceneManager.h"
+#include "SceneManager.hpp"
 
 SceneManager& SceneManager::GetInstance() {
     static SceneManager instance;

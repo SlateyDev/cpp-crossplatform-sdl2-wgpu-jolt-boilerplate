@@ -1,10 +1,10 @@
-#include "GameObject.h"
+#include "GameObject.hpp"
 
 #include <stdexcept>
 
-#include "Component.h"
-#include "Scene.h"
-#include "SceneManager.h"
+#include "Component.hpp"
+#include "Scene.hpp"
+#include "SceneManager.hpp"
 
 void GameObject::setScene(Scene *scene) {
     this->scene = scene;

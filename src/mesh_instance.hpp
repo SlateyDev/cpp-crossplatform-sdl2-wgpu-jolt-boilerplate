@@ -1,9 +1,9 @@
 #pragma once
 
-#include "node_3d.h"
-
 #include <webgpu/webgpu.h>
 #include <string>
+
+#include "node_3d.hpp"
 
 class MeshInstance : public Node3D {
     public:

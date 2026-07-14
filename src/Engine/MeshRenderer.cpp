@@ -1,6 +1,6 @@
-#include "MeshRenderer.h"
+#include "MeshRenderer.hpp"
 
-#include "GameObject.h"
+#include "GameObject.hpp"
 
 void MeshRenderer::Render() {
     auto worldTransform = getParent()->GetWorldTransform();

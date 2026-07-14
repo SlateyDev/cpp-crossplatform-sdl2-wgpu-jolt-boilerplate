@@ -1,8 +1,8 @@
-#include "Scene.h"
+#include "Scene.hpp"
 
-#include "BaseObject.h"
-#include "GameObject.h"
-#include "Renderable.h"
+#include "BaseObject.hpp"
+#include "GameObject.hpp"
+#include "Renderable.hpp"
 
 void Scene::setIsActive(const bool value) {
     isActive = value;

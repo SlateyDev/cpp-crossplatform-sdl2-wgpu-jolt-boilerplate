@@ -1,8 +1,7 @@
+#include "gltf_loader.hpp"
+
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
-
-#include "gltf_loader.h"
-#include "structures.h"
 
 #include <SDL.h>
 #include <SDL_image.h>
@@ -10,6 +9,8 @@
 #include <array>
 #include <climits>
 #include <vector>
+
+#include "structures.hpp"
 
 std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath) {
     SDL_Surface* surface = IMG_Load(("./assets/" + filepath).c_str());

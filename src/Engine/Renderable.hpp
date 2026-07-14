@@ -3,7 +3,7 @@
 #include <glm/vec3.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Component.h"
+#include "Component.hpp"
 
 class Renderable : public Component {
 public:

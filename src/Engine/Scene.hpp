@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "Frustum.h"
+#include "Frustum.hpp"
 
 class BaseObject;
 class GameObject;

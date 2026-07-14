@@ -7,8 +7,8 @@
 #include <webgpu/webgpu.h>
 #include <iostream>
 
-#include "primitive.h"
-#include "structures.h"
+#include "primitive.hpp"
+#include "structures.hpp"
 
 std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath);
 

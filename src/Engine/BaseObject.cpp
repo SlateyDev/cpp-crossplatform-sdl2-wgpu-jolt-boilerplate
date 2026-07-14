@@ -1,7 +1,7 @@
-#include "BaseObject.h"
+#include "BaseObject.hpp"
 
-#include "Component.h"
-#include "GameObject.h"
+#include "Component.hpp"
+#include "GameObject.hpp"
 
 GameObject* BaseObject::getParent() const {
     return parent;
