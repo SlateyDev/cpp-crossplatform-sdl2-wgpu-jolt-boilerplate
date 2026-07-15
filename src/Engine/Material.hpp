@@ -1,5 +1,5 @@
 #pragma once
 
-class Material
+struct Material
 {
 };
