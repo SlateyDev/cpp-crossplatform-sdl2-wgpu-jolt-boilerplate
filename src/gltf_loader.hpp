@@ -10,11 +10,11 @@
 
 #include "primitive.hpp"
 #include "structures.hpp"
-
-std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath);
+#include "Engine/AssetManager.hpp"
 
 bool LoadGltfPrimitives(
     const GpuState &gpuState,
+    AssetManager& assetManager,
     const std::string &gltfPath,
     std::unordered_map<std::string, UnlitMaterial> &materials,
     std::vector<Primitive> &outPrimitives,

@@ -5,6 +5,8 @@
 #include <vector>
 #include <glm/glm.hpp>
 
+class AssetManager;
+
 struct Mesh;
 struct Material;
 
@@ -16,7 +18,7 @@ class Model
     std::vector<Material> materials;
 
 public:
-    bool LoadGltf(const std::string& fileName, std::string& outError);
+    bool LoadGltf(const std::string& fileName, AssetManager& assetManager, std::string& outError);
 };
 
 #endif

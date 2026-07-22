@@ -3,67 +3,12 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
-#include <SDL.h>
-#include <SDL_image.h>
-
 #include <array>
 #include <climits>
 #include <vector>
 
 #include "structures.hpp"
-
-std::tuple<WGPUTexture, WGPUTextureView> LoadImageTexture(const GpuState &gpuState, const std::string& filepath) {
-    SDL_Surface* surface = IMG_Load(("./assets/" + filepath).c_str());
-    if (!surface) {
-        std::cerr << "Failed to load image: " << filepath << " Error: " << IMG_GetError() << std::endl;
-        return {};
-    }
-    std::cout << "Loaded texture: " << filepath << " - dimensions: " << surface->w << "x" << surface->h << std::endl;
-
-    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_BGRA32, 0);
-    SDL_FreeSurface(surface);
-
-    if (!convertedSurface) {
-        std::cerr << "Failed to convert surface format for: " << filepath << " Error: " << SDL_GetError() << std::endl;
-        return {};
-    }
-
-    const auto width = static_cast<uint32_t>(convertedSurface->w);
-    const auto height = static_cast<uint32_t>(convertedSurface->h);
-
-    const WGPUTextureDescriptor textureDesc {
-        .label = {filepath.c_str(), WGPU_STRLEN},
-        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
-        .dimension = WGPUTextureDimension_2D,
-        .size = {width, height, 1},
-        .format = WGPUTextureFormat_BGRA8Unorm,
-        .mipLevelCount = 1,
-        .sampleCount = 1,
-    };
-    WGPUTexture texture = wgpuDeviceCreateTexture(gpuState.device, &textureDesc);
-
-    const WGPUTexelCopyTextureInfo destination {
-        .texture = texture,
-        .mipLevel = 0,
-        .origin = {0, 0, 0},
-        .aspect = WGPUTextureAspect_All,
-    };
-    const WGPUTexelCopyBufferLayout dataLayout {
-        .offset = 0,
-        .bytesPerRow = static_cast<uint32_t>(convertedSurface->pitch),
-        .rowsPerImage = height,
-    };
-    const WGPUExtent3D writeSize {
-        .width = width,
-        .height = height,
-        .depthOrArrayLayers = 1,
-    };
-    wgpuQueueWriteTexture(gpuState.queue, &destination, convertedSurface->pixels, convertedSurface->pitch * height, &dataLayout, &writeSize);
-
-    SDL_FreeSurface(convertedSurface);
-
-    return {texture, wgpuTextureCreateView(texture, nullptr)};
-}
+#include "Engine/EngineTexture.hpp"
 
 namespace {
 
@@ -170,6 +115,7 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
 
 bool LoadGltfPrimitives(
     const GpuState &gpuState,
+    AssetManager& assetManager,
     const std::string &gltfPath,
     std::unordered_map<std::string, UnlitMaterial> &materials,
     std::vector<Primitive> &outPrimitives,
@@ -283,10 +229,23 @@ bool LoadGltfPrimitives(
         const auto &material = data->materials[materialIndex];
 
         if (material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
-            const auto [materialTexture, materialTextureView] = ::LoadImageTexture(gpuState, material.pbr_metallic_roughness.base_color_texture.texture->image->uri);
+            const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
+            if (image == nullptr || image->uri == nullptr) {
+                outError = "Material base color texture is missing image URI.";
+                cgltf_free(data);
+                return false;
+            }
+
+            std::string textureLoadError;
+            const auto materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
+            if (!materialTexture) {
+                outError = textureLoadError.empty() ? "Failed to load material texture." : textureLoadError;
+                cgltf_free(data);
+                return false;
+            }
 
             const auto bindGroupEntries = std::to_array<WGPUBindGroupEntry>({
-                {.binding = 0, .textureView = materialTextureView},
+                {.binding = 0, .textureView = materialTexture->getTextureView()},
                 {.binding = 1, .sampler = gpuState.defaultSampler},
                 // {binding = 2, textureView = normalTextureView},
                 // {binding = 3, sampler = normalSampler},
@@ -309,8 +268,8 @@ bool LoadGltfPrimitives(
                 &bindGroupDesc);
 
             materials[material.name] = UnlitMaterial{
-                .baseColorTexture = materialTexture,
-                .baseColorTextureView = materialTextureView,
+                .baseColorTexture = materialTexture->getTexture(),
+                .baseColorTextureView = materialTexture->getTextureView(),
                 .bindGroup = newBindGroup,
             };
         }

@@ -7,15 +7,15 @@
 bool EngineTexture::LoadImage(const std::string& fileName) {
     this->fileName = fileName;
 
-    SDL_Surface* surface = IMG_Load(("./assets/" + fileName).c_str());
-    if (!surface) {
+    SDL_Surface* loadedTexture = IMG_Load(("./assets/" + fileName).c_str());
+    if (!loadedTexture) {
         std::cerr << "Failed to load image: " << fileName << " Error: " << IMG_GetError() << std::endl;
         return false;
     }
-    std::cout << "Loaded texture: " << fileName << " - dimensions: " << surface->w << "x" << surface->h << std::endl;
+    std::cout << "Loaded texture: " << fileName << " - dimensions: " << loadedTexture->w << "x" << loadedTexture->h << std::endl;
 
-    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_BGRA32, 0);
-    SDL_FreeSurface(surface);
+    SDL_Surface* convertedSurface = SDL_ConvertSurfaceFormat(loadedTexture, SDL_PIXELFORMAT_BGRA32, 0);
+    SDL_FreeSurface(loadedTexture);
 
     if (!convertedSurface) {
         std::cerr << "Failed to convert surface format for: " << fileName << " Error: " << SDL_GetError() << std::endl;
@@ -62,9 +62,8 @@ EngineTexture::~EngineTexture() {
     texture = nullptr;
     if (view) wgpuTextureViewRelease(view);
     view = nullptr;
-    if (surface) {
-        SDL_FreeSurface(surface);
-    }
+    if (surface) SDL_FreeSurface(surface);
+    surface = nullptr;
 }
 
 bool EngineTexture::CreateTextureAndView(WGPUDevice device, WGPUQueue queue)

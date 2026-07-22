@@ -2,6 +2,7 @@
 #define ABERRANT_ENGINE_ASSETTYPES_HPP
 
 #include <memory>
+#include <atomic>
 #include <string>
 #include <vector>
 

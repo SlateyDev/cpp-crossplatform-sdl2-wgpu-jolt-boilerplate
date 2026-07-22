@@ -42,6 +42,8 @@
 #include "structures.hpp"
 
 #include "Engine/GameObject.hpp"
+#include "Engine/AssetManager.hpp"
+#include "Engine/EngineTexture.hpp"
 
 namespace {
 
@@ -1360,6 +1362,8 @@ int main()
     shaders["forwardShader"] = createShaderModule(app.gpu.device, "assets/shaders/forward_renderer.wgsl");
     shaders["shadowCaster"] = createShaderModule(app.gpu.device, "assets/shaders/shadow_caster.wgsl");
 
+    AssetManager assetManager(app.gpu.device, app.gpu.queue);
+
     std::vector<Primitive> cube_primitives = std::vector<Primitive>{
         Primitive::CreateFromPremadeData(app.gpu.device, boxVertices, boxIndices, "sample.png"),
     };
@@ -1374,7 +1378,7 @@ int main()
     if (std::filesystem::exists(modelPath)) {
         std::vector<Primitive> boomBoxPrimitives;
         std::string loadError;
-        if (LoadGltfPrimitives(app.gpu, modelPath, materials, boomBoxPrimitives, loadError)) {
+        if (LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
             meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
             objects.push_back(&gameObject2);
             std::cout << "Loaded glTF model: " << modelPath << "\n";
@@ -1603,8 +1607,15 @@ int main()
         return wgpuDeviceCreateBindGroup(app.gpu.device, &desc);
     }();
 
-    // Load sample.png using SDL2 as texture and create a bind group for it
-    auto [texture, textureView] = LoadImageTexture(app.gpu, "sample.png");
+    std::string sampleTextureError;
+    const auto sampleTexture = assetManager.RequestTexture("sample.png", sampleTextureError);
+    if (!sampleTexture) {
+        std::cerr << "Failed to load default texture sample.png: " << sampleTextureError << "\n";
+        return 1;
+    }
+
+    const auto texture = sampleTexture->getTexture();
+    const auto textureView = sampleTexture->getTextureView();
     materials["sample.png"] = UnlitMaterial{
         .id = 0,
         .baseColorTexture = texture,

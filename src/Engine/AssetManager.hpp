@@ -3,9 +3,13 @@
 
 #include <shared_mutex>
 #include <unordered_map>
+#include <memory>
+#include <string>
 #include <webgpu.h>
 
 #include "AssetTypes.hpp"
+
+class EngineTexture;
 
 class AssetManager
 {
@@ -26,8 +30,12 @@ class AssetManager
     template<typename T>
     const T* TryGetTyped(AssetHandle<T> handle, AssetType expected) const;
 
+    static AssetId MakeAssetId(const std::string& path, AssetType type);
+
 public:
     AssetManager(WGPUDevice device, WGPUQueue queue);
+    ~AssetManager();
+    const EngineTexture* RequestTexture(const std::string& path, std::string& outError);
 };
 
 #endif

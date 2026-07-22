@@ -3,7 +3,7 @@
 // #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
-#include "EngineTexture.hpp"
+#include "AssetManager.hpp"
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "../primitive.hpp"
@@ -108,7 +108,7 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
     return true;
 }
 
-bool Model::LoadGltf(const std::string& fileName, std::string& outError) {
+bool Model::LoadGltf(const std::string& fileName, AssetManager& assetManager, std::string& outError) {
     outError.clear();
     meshes.clear();
     materials.clear();
@@ -202,10 +202,23 @@ bool Model::LoadGltf(const std::string& fileName, std::string& outError) {
 
     for (auto materialIndex = 0; materialIndex < data->materials_count; ++materialIndex) {
         if (const auto &material = data->materials[materialIndex]; material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
-            const auto [materialTexture, materialTextureView] = ::LoadImageTexture(gpuState, material.pbr_metallic_roughness.base_color_texture.texture->image->uri);
+            const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
+            if (image == nullptr || image->uri == nullptr) {
+                outError = "Material base color texture is missing image URI.";
+                cgltf_free(data);
+                return false;
+            }
+
+            std::string textureLoadError;
+            const auto texture = assetManager.RequestTexture(image->uri, textureLoadError);
+            if (!texture) {
+                outError = textureLoadError.empty() ? "Failed to load material texture." : textureLoadError;
+                cgltf_free(data);
+                return false;
+            }
 
             // const auto bindGroupEntries = std::to_array<WGPUBindGroupEntry>({
-            //     {.binding = 0, .textureView = materialTextureView},
+            //     {.binding = 0, .textureView = texture->getTextureView()},
             //     {.binding = 1, .sampler = gpuState.defaultSampler},
             //     // {binding = 2, textureView = normalTextureView},
             //     // {binding = 3, sampler = normalSampler},
@@ -228,8 +241,8 @@ bool Model::LoadGltf(const std::string& fileName, std::string& outError) {
             //     &bindGroupDesc);
             //
             // materials[material.name] = UnlitMaterial{
-            //     .baseColorTexture = materialTexture,
-            //     .baseColorTextureView = materialTextureView,
+            //     .baseColorTexture = texture->getTexture(),
+            //     .baseColorTextureView = texture->getTextureView(),
             //     .bindGroup = newBindGroup,
             // };
         }
