@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_TRANSFORM_HPP
+#define ABERRANT_ENGINE_TRANSFORM_HPP
 
 #include <glm/vec3.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -25,3 +26,5 @@ struct Transform {
         };
     }
 };
+
+#endif

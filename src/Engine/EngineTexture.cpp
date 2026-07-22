@@ -4,7 +4,7 @@
 
 // #include <queue>
 
-bool EngineTexture::LoadImage(std::string fileName) {
+bool EngineTexture::LoadImage(const std::string& fileName) {
     this->fileName = fileName;
 
     SDL_Surface* surface = IMG_Load(("./assets/" + fileName).c_str());
@@ -21,43 +21,7 @@ bool EngineTexture::LoadImage(std::string fileName) {
         std::cerr << "Failed to convert surface format for: " << fileName << " Error: " << SDL_GetError() << std::endl;
         return false;
     }
-    this->surface = convertedSurface;
-
-    const auto width = static_cast<uint32_t>(convertedSurface->w);
-    const auto height = static_cast<uint32_t>(convertedSurface->h);
-
-    // const WGPUTextureDescriptor textureDesc {
-    //     .label = {filepath.c_str(), WGPU_STRLEN},
-    //     .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
-    //     .dimension = WGPUTextureDimension_2D,
-    //     .size = {width, height, 1},
-    //     .format = WGPUTextureFormat_BGRA8Unorm,
-    //     .mipLevelCount = 1,
-    //     .sampleCount = 1,
-    // };
-    // WGPUTexture texture = wgpuDeviceCreateTexture(gpuState.device, &textureDesc);
-
-    // const WGPUTexelCopyTextureInfo destination {
-    //     .texture = texture,
-    //     .mipLevel = 0,
-    //     .origin = {0, 0, 0},
-    //     .aspect = WGPUTextureAspect_All,
-    // };
-    // const WGPUTexelCopyBufferLayout dataLayout {
-    //     .offset = 0,
-    //     .bytesPerRow = static_cast<uint32_t>(convertedSurface->pitch),
-    //     .rowsPerImage = height,
-    // };
-    // const WGPUExtent3D writeSize {
-    //     .width = width,
-    //     .height = height,
-    //     .depthOrArrayLayers = 1,
-    // };
-    // wgpuQueueWriteTexture(gpuState.queue, &destination, convertedSurface->pixels, convertedSurface->pitch * height, &dataLayout, &writeSize);
-
-    // SDL_FreeSurface(convertedSurface);
-
-    // return {texture, wgpuTextureCreateView(texture, nullptr)};
+    surface = convertedSurface;
     return true;
 }
 // EngineTexture::EngineTexture(const WGPUDevice device, const WGPUQueue queue, const glm::vec4 colour) : EngineTexture(device, queue, static_cast<int>(colour.r * 255), static_cast<int>(colour.g * 255), static_cast<int>(colour.b * 255), static_cast<int>(colour.a * 255)) {
@@ -94,13 +58,64 @@ bool EngineTexture::LoadImage(std::string fileName) {
 // }
 
 EngineTexture::~EngineTexture() {
-    // if (texture) wgpuTextureRelease(texture);
-    // texture = nullptr;
-    // if (view) wgpuTextureViewRelease(view);
-    // view = nullptr;
-    if (this->surface) {
-        SDL_FreeSurface(this->surface);
+    if (texture) wgpuTextureRelease(texture);
+    texture = nullptr;
+    if (view) wgpuTextureViewRelease(view);
+    view = nullptr;
+    if (surface) {
+        SDL_FreeSurface(surface);
     }
+}
+
+bool EngineTexture::CreateTextureAndView(WGPUDevice device, WGPUQueue queue)
+{
+    if (!surface) return false;
+
+    const auto width = static_cast<uint32_t>(surface->w);
+    const auto height = static_cast<uint32_t>(surface->h);
+
+    const WGPUTextureDescriptor textureDesc {
+        .label = {"Texture", WGPU_STRLEN},
+        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
+        .dimension = WGPUTextureDimension_2D,
+        .size = {width, height, 1},
+        .format = WGPUTextureFormat_BGRA8Unorm,
+        .mipLevelCount = 1,
+        .sampleCount = 1,
+    };
+    texture = wgpuDeviceCreateTexture(device, &textureDesc);
+
+    const WGPUTexelCopyTextureInfo destination {
+        .texture = texture,
+        .mipLevel = 0,
+        .origin = {0, 0, 0},
+        .aspect = WGPUTextureAspect_All,
+    };
+    const WGPUTexelCopyBufferLayout dataLayout {
+        .offset = 0,
+        .bytesPerRow = static_cast<uint32_t>(surface->pitch),
+        .rowsPerImage = height,
+    };
+    const WGPUExtent3D writeSize {
+        .width = width,
+        .height = height,
+        .depthOrArrayLayers = 1,
+    };
+    wgpuQueueWriteTexture(queue, &destination, surface->pixels, surface->pitch * height, &dataLayout, &writeSize);
+
+    view = wgpuTextureCreateView(texture, nullptr);
+
+    return true;
+}
+
+WGPUTexture EngineTexture::getTexture() const
+{
+    return texture;
+}
+
+WGPUTextureView EngineTexture::getTextureView() const
+{
+    return view;
 }
 
 // EngineTexture * EngineTexture::FromColour(const WGPUDevice device, const WGPUQueue queue, const glm::vec4 colour) {

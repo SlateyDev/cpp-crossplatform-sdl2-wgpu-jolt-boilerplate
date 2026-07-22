@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_COMPONENT_HPP
+#define ABERRANT_ENGINE_COMPONENT_HPP
 
 #include "BaseObject.hpp"
 
@@ -25,3 +26,5 @@ public:
     virtual void OnDisable() {}
     virtual void OnDestroy() {}
 };
+
+#endif

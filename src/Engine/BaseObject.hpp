@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_BASEOBJECT_HPP
+#define ABERRANT_ENGINE_BASEOBJECT_HPP
 
 #include <concepts>
 #include <vector>
@@ -50,3 +51,5 @@ public:
 
     static void Destroy(BaseObject* obj);
 };
+
+#endif

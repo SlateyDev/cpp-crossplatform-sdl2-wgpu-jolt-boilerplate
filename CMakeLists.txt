@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(wgpu_jolt_starter LANGUAGES CXX)
+project(aberrant_engine LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,17 +7,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
-option(WGPU_JOLT_USE_SYSTEM_DEPS "Use pre-installed webgpu/Jolt instead of FetchContent" OFF)
+option(ABERRANT_USE_SYSTEM_DEPS "Use pre-installed webgpu/Jolt instead of FetchContent" OFF)
 
 file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
-add_executable(wgpu_jolt_app
+add_executable(aberrant_engine
     ${SOURCE_FILES}
 )
 
-target_compile_features(wgpu_jolt_app PRIVATE cxx_std_20)
+target_compile_features(aberrant_engine PRIVATE cxx_std_20)
 
-if(WGPU_JOLT_USE_SYSTEM_DEPS)
+if(ABERRANT_USE_SYSTEM_DEPS)
     find_package(glm CONFIG QUIET)
 endif()
 
@@ -39,7 +39,7 @@ if(NOT TARGET glm::glm)
     target_include_directories(glm_headers INTERFACE ${glm_SOURCE_DIR})
 endif()
 
-if(WGPU_JOLT_USE_SYSTEM_DEPS)
+if(ABERRANT_USE_SYSTEM_DEPS)
     find_path(CGLTF_INCLUDE_DIR cgltf.h)
 endif()
 
@@ -59,18 +59,18 @@ if(NOT CGLTF_INCLUDE_DIR)
     set(CGLTF_INCLUDE_DIR ${cgltf_SOURCE_DIR})
 endif()
 
-target_link_libraries(wgpu_jolt_app PRIVATE glm::glm)
-target_include_directories(wgpu_jolt_app PRIVATE ${CGLTF_INCLUDE_DIR})
+target_link_libraries(aberrant_engine PRIVATE glm::glm)
+target_include_directories(aberrant_engine PRIVATE ${CGLTF_INCLUDE_DIR})
 
 if(MSVC)
-    set_property(TARGET wgpu_jolt_app PROPERTY
+    set_property(TARGET aberrant_engine PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    target_compile_options(wgpu_jolt_app PRIVATE $<$<CONFIG:Debug>:/Zi /Od>)
-    target_link_options(wgpu_jolt_app PRIVATE $<$<CONFIG:Debug>:/DEBUG>)
+    target_compile_options(aberrant_engine PRIVATE $<$<CONFIG:Debug>:/Zi /Od>)
+    target_link_options(aberrant_engine PRIVATE $<$<CONFIG:Debug>:/DEBUG>)
 endif()
 
 if(EMSCRIPTEN)
-    if(NOT WGPU_JOLT_USE_SYSTEM_DEPS)
+    if(NOT ABERRANT_USE_SYSTEM_DEPS)
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
         set(JPH_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -102,7 +102,7 @@ if(EMSCRIPTEN)
         )
 
         FetchContent_MakeAvailable(JoltPhysics WebGPU_Distribution webgpu_headers)
-        target_include_directories(wgpu_jolt_app PRIVATE ${webgpu_headers_SOURCE_DIR})
+        target_include_directories(aberrant_engine PRIVATE ${webgpu_headers_SOURCE_DIR})
     endif()
 
     set(WGPU_TARGET "")
@@ -119,20 +119,20 @@ if(EMSCRIPTEN)
     endif()
 
     if(TARGET Jolt)
-        target_link_libraries(wgpu_jolt_app PRIVATE Jolt)
+        target_link_libraries(aberrant_engine PRIVATE Jolt)
     elseif(TARGET JoltPhysics)
-        target_link_libraries(wgpu_jolt_app PRIVATE JoltPhysics)
+        target_link_libraries(aberrant_engine PRIVATE JoltPhysics)
     else()
         message(FATAL_ERROR "Could not locate Jolt target (tried: Jolt, JoltPhysics).")
     endif()
 
-    target_compile_definitions(wgpu_jolt_app PRIVATE WGPU_JOLT_WASM=1)
-    target_compile_options(wgpu_jolt_app PRIVATE
+    target_compile_definitions(aberrant_engine PRIVATE ABERRANT_WASM=1)
+    target_compile_options(aberrant_engine PRIVATE
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
         "-sSDL2_IMAGE_FORMATS=['png']"
     )
-    target_link_options(wgpu_jolt_app PRIVATE
+    target_link_options(aberrant_engine PRIVATE
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
         "-sSDL2_IMAGE_FORMATS=['png']"
@@ -141,14 +141,14 @@ if(EMSCRIPTEN)
         "--preload-file"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
     )
-    target_link_libraries(wgpu_jolt_app PRIVATE ${WGPU_TARGET})
-    set_target_properties(wgpu_jolt_app PROPERTIES SUFFIX ".html")
+    target_link_libraries(aberrant_engine PRIVATE ${WGPU_TARGET})
+    set_target_properties(aberrant_engine PROPERTIES SUFFIX ".html")
 else()
-    if(WGPU_JOLT_USE_SYSTEM_DEPS)
+    if(ABERRANT_USE_SYSTEM_DEPS)
         find_package(webgpu CONFIG QUIET)
     endif()
 
-    if(NOT WGPU_JOLT_USE_SYSTEM_DEPS)
+    if(NOT ABERRANT_USE_SYSTEM_DEPS)
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
         set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -212,31 +212,31 @@ else()
     endif()
 
     if(TARGET Jolt)
-        target_link_libraries(wgpu_jolt_app PRIVATE Jolt)
+        target_link_libraries(aberrant_engine PRIVATE Jolt)
     elseif(TARGET JoltPhysics)
-        target_link_libraries(wgpu_jolt_app PRIVATE JoltPhysics)
+        target_link_libraries(aberrant_engine PRIVATE JoltPhysics)
     else()
         message(FATAL_ERROR "Could not locate Jolt target (tried: Jolt, JoltPhysics).")
     endif()
 
-    target_link_libraries(wgpu_jolt_app PRIVATE ${WGPU_TARGET})
+    target_link_libraries(aberrant_engine PRIVATE ${WGPU_TARGET})
     if(TARGET SDL2-static)
-        target_link_libraries(wgpu_jolt_app PRIVATE SDL2-static)
+        target_link_libraries(aberrant_engine PRIVATE SDL2-static)
     elseif(TARGET SDL2::SDL2)
-        target_link_libraries(wgpu_jolt_app PRIVATE SDL2::SDL2)
+        target_link_libraries(aberrant_engine PRIVATE SDL2::SDL2)
     else()
         message(FATAL_ERROR "Could not locate SDL2 target (tried: SDL2-static, SDL2::SDL2).")
     endif()
 
     if(TARGET SDL2_image::SDL2_image-static)
-        target_link_libraries(wgpu_jolt_app PRIVATE SDL2_image::SDL2_image-static)
+        target_link_libraries(aberrant_engine PRIVATE SDL2_image::SDL2_image-static)
     elseif(TARGET SDL2_image::SDL2_image)
-        target_link_libraries(wgpu_jolt_app PRIVATE SDL2_image::SDL2_image)
+        target_link_libraries(aberrant_engine PRIVATE SDL2_image::SDL2_image)
     else()
         message(FATAL_ERROR "Could not locate SDL2_image target (tried: SDL2_image::SDL2_image-static, SDL2_image::SDL2_image).")
     endif()
 
     if(COMMAND target_copy_webgpu_binaries)
-        target_copy_webgpu_binaries(wgpu_jolt_app)
+        target_copy_webgpu_binaries(aberrant_engine)
     endif()
 endif()

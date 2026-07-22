@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_SCENEMANAGER_HPP
+#define ABERRANT_ENGINE_SCENEMANAGER_HPP
 
 #include <memory>
 
@@ -13,3 +14,5 @@ public:
 
     Scene* GetActiveScene() const;
 };
+
+#endif

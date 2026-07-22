@@ -3,6 +3,7 @@
 // #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+#include "EngineTexture.hpp"
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "../primitive.hpp"
@@ -53,7 +54,7 @@ bool ReadVec3(const cgltf_accessor *accessor, std::vector<glm::vec3> &output)
         return false;
     }
 
-    output.resize(static_cast<size_t>(accessor->count));
+    output.resize(accessor->count);
     std::vector<float> unpacked(static_cast<size_t>(accessor->count) * 3);
     const cgltf_size unpackedCount = cgltf_accessor_unpack_floats(accessor, unpacked.data(), unpacked.size());
     if (unpackedCount < accessor->count * 3) {
@@ -61,8 +62,8 @@ bool ReadVec3(const cgltf_accessor *accessor, std::vector<glm::vec3> &output)
     }
 
     for (cgltf_size i = 0; i < accessor->count; ++i) {
-        const size_t base = static_cast<size_t>(i) * 3;
-        output[static_cast<size_t>(i)] = glm::vec3(unpacked[base], unpacked[base + 1], unpacked[base + 2]);
+        const size_t base = i * 3;
+        output[i] = glm::vec3(unpacked[base], unpacked[base + 1], unpacked[base + 2]);
     }
 
     return true;
@@ -74,7 +75,7 @@ bool ReadVec2(const cgltf_accessor *accessor, std::vector<glm::vec2> &output)
         return false;
     }
 
-    output.resize(static_cast<size_t>(accessor->count));
+    output.resize(accessor->count);
     std::vector<float> unpacked(static_cast<size_t>(accessor->count) * 2);
     const cgltf_size unpackedCount = cgltf_accessor_unpack_floats(accessor, unpacked.data(), unpacked.size());
     if (unpackedCount < accessor->count * 2) {
@@ -82,8 +83,8 @@ bool ReadVec2(const cgltf_accessor *accessor, std::vector<glm::vec2> &output)
     }
 
     for (cgltf_size i = 0; i < accessor->count; ++i) {
-        const size_t base = static_cast<size_t>(i) * 2;
-        output[static_cast<size_t>(i)] = glm::vec2(unpacked[base], unpacked[base + 1]);
+        const size_t base = i * 2;
+        output[i] = glm::vec2(unpacked[base], unpacked[base + 1]);
     }
 
     return true;
@@ -95,13 +96,13 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
         return false;
     }
 
-    output.resize(static_cast<size_t>(accessor->count));
+    output.resize(accessor->count);
     for (cgltf_size i = 0; i < accessor->count; ++i) {
         const cgltf_uint index = cgltf_accessor_read_index(accessor, i);
         if (index > static_cast<cgltf_uint>(INT_MAX)) {
             return false;
         }
-        output[static_cast<size_t>(i)] = static_cast<int>(index);
+        output[i] = static_cast<int>(index);
     }
 
     return true;

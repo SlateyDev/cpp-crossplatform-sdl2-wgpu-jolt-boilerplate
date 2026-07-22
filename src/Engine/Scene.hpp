@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_SCENE_HPP
+#define ABERRANT_ENGINE_SCENE_HPP
 
 #include <vector>
 
@@ -32,3 +33,5 @@ public:
     void RefreshRenderables();
     void Render(Frustum& cameraFrustum, bool shadowRender = false) const;
 };
+
+#endif

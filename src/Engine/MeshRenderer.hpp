@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_MESHRENDERER_HPP
+#define ABERRANT_ENGINE_MESHRENDERER_HPP
 
 #include "Renderable.hpp"
 
@@ -12,3 +13,5 @@ public:
     // Model* getModel();
     void Render() override;
 };
+
+#endif

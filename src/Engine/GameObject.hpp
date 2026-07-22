@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_GAMEOBJECT_HPP
+#define ABERRANT_ENGINE_GAMEOBJECT_HPP
 
 #include <string>
 #include <glm/vec3.hpp>
@@ -42,3 +43,5 @@ public:
 
     void Update(float dt) const;
 };
+
+#endif

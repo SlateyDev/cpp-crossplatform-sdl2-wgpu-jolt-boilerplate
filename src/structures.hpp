@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_STRUCTURES_HPP
+#define ABERRANT_STRUCTURES_HPP
 
 #include <array>
 #include <glm/glm.hpp>
@@ -65,3 +66,5 @@ struct AppState {
     float frameDeltaSeconds = 1.0f / 60.0f;
     Uint64 lastFrameCounter = 0;
 };
+
+#endif

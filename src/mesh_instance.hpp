@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_MESH_INSTANCE_HPP
+#define ABERRANT_MESH_INSTANCE_HPP
 
 #include <webgpu/webgpu.h>
 #include <string>
@@ -18,3 +19,5 @@ class MeshInstance : public Node3D {
         WGPUBindGroup uniformBindGroup{};
         std::string meshName;
 };
+
+#endif

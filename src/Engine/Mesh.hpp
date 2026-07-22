@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_MESH_HPP
+#define ABERRANT_ENGINE_MESH_HPP
 
 #include <string>
 #include <vector>
@@ -18,3 +19,5 @@ struct Mesh
     WGPUBuffer indexBuffer = nullptr;
     uint32_t indexCount = 0;
 };
+
+#endif

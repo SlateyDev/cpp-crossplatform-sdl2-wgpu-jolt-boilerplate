@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_RENDERABLE_HPP
+#define ABERRANT_ENGINE_RENDERABLE_HPP
 
 #include <glm/vec3.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -22,3 +23,5 @@ public:
     glm::mat4 Transform();
     BoundingSphere GetBoundingSphere();
 };
+
+#endif

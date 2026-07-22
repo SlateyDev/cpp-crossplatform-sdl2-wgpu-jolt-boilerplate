@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_PRIMITIVE_HPP
+#define ABERRANT_PRIMITIVE_HPP
 
 #include "glm/glm.hpp"
 
@@ -27,3 +28,5 @@ extern const std::vector<Vertex> boxVertices;
 extern const std::vector<int> boxIndices;
 extern const std::vector<Vertex> planeVertices;
 extern const std::vector<int> planeIndices;
+
+#endif

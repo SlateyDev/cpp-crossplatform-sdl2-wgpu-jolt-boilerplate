@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_FRUSTUM_HPP
+#define ABERRANT_ENGINE_FRUSTUM_HPP
 
 #include <glm/glm.hpp>
 #include <glm/vec4.hpp>
@@ -134,3 +135,5 @@ public:
         return true;
     }
 };
+
+#endif

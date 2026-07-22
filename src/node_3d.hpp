@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_NODE_3D_HPP
+#define ABERRANT_NODE_3D_HPP
 
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
@@ -16,3 +17,5 @@ class Node3D {
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         glm::vec3 scale{1.0f, 1.0f, 1.0f};
 };
+
+#endif

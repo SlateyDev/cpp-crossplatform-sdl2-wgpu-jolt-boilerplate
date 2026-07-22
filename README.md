@@ -22,7 +22,7 @@ This project initializes:
 ```powershell
 cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
-.\build\windows-debug\wgpu_jolt_app.exe
+.\build\windows-debug\aberrant_engine.exe
 ```
 
 This opens an SDL2 window and renders a multicolored triangle via WebGPU.
@@ -32,7 +32,7 @@ This opens an SDL2 window and renders a multicolored triangle via WebGPU.
 ```bash
 cmake --preset linux-clang-debug
 cmake --build --preset linux-clang-debug
-./build/linux-debug/wgpu_jolt_app
+./build/linux-debug/aberrant_engine
 ```
 
 ### macOS
@@ -40,7 +40,7 @@ cmake --build --preset linux-clang-debug
 ```bash
 cmake --preset macos-clang-debug
 cmake --build --preset macos-clang-debug
-./build/macos-debug/wgpu_jolt_app
+./build/macos-debug/aberrant_engine
 ```
 
 ## Build (wasm)
@@ -61,7 +61,7 @@ Run from a local web server (required by browsers for WebGPU):
 python -m http.server -d build/wasm-debug 8000
 ```
 
-Then open `http://localhost:8000/wgpu_jolt_app.html`.
+Then open `http://localhost:8000/aberrant_engine.html`.
 
 ## Fly camera controls
 
@@ -94,5 +94,5 @@ cmake --list-presets=all
 - If your environment already provides these dependencies, set:
 
 ```bash
-cmake -DWGPU_JOLT_USE_SYSTEM_DEPS=ON ...
+cmake -DABERRANT_USE_SYSTEM_DEPS=ON ...
 ```

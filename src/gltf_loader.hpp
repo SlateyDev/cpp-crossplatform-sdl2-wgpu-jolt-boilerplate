@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_GLTF_LOADER_HPP
+#define ABERRANT_GLTF_LOADER_HPP
 
 #include <string>
 #include <unordered_map>
@@ -19,3 +20,5 @@ bool LoadGltfPrimitives(
     std::vector<Primitive> &outPrimitives,
     std::string &outError
 );
+
+#endif

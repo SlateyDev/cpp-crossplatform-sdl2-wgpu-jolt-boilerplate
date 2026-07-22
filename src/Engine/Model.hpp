@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ABERRANT_ENGINE_MODEL_HPP
+#define ABERRANT_ENGINE_MODEL_HPP
 
 #include <string>
 #include <vector>
@@ -17,3 +18,5 @@ class Model
 public:
     bool LoadGltf(const std::string& fileName, std::string& outError);
 };
+
+#endif
