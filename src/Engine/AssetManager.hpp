@@ -27,9 +27,6 @@ class AssetManager
 
     // uint64_t unloadGraceFrames {180};
 
-    template<typename T>
-    const T* TryGetTyped(AssetHandle<T> handle, AssetType expected) const;
-
     static AssetId MakeAssetId(const std::string& path, AssetType type);
 
 public:

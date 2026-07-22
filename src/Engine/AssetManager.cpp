@@ -5,21 +5,52 @@
 
 #include "EngineTexture.hpp"
 
-template <typename T>
-const T* AssetManager::TryGetTyped(AssetHandle<T> handle, AssetType expected) const
+namespace
 {
-    std::shared_lock lock(mapMutex);
-    auto it = assets.find(handle.id);
-    if (it == assets.end()) return nullptr;
-
-    auto* base = it->second.get();
-    if (base->type != expected) return nullptr;
-    if (base->generation != handle.generation) return nullptr;
+const EngineTexture* GetReadyTextureFromRecord(const AssetRecordBase* base)
+{
+    if (!base || base->type != AssetType::Texture) return nullptr;
     if (base->state.load(std::memory_order_acquire) != AssetState::Ready) return nullptr;
 
-    auto* rec = static_cast<AssetRecord<T>*>(base);
-    if (!rec->hasResource) return nullptr;
-    return &rec->resource;
+    const auto* record = static_cast<const AssetRecord<std::unique_ptr<EngineTexture>>*>(base);
+    if (!record->hasResource || record->resource == nullptr) return nullptr;
+    return record->resource.get();
+}
+
+const EngineTexture* FindReadyTextureByPathLocked(
+    const std::unordered_map<std::string, AssetId>& pathToId,
+    const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
+    const std::string& path)
+{
+    const auto mapped = pathToId.find(path);
+    if (mapped == pathToId.end()) return nullptr;
+
+    const auto existing = assets.find(mapped->second);
+    if (existing == assets.end()) return nullptr;
+
+    return GetReadyTextureFromRecord(existing->second.get());
+}
+
+AssetId FindAvailableTextureAssetIdLocked(
+    const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
+    AssetId assetId,
+    const std::string& path)
+{
+    auto existing = assets.find(assetId);
+    while (existing != assets.end()) {
+        const auto* base = existing->second.get();
+        if (base->path == path && base->type == AssetType::Texture) {
+            break;
+        }
+
+        ++assetId.value;
+        if (assetId.value == 0) {
+            assetId.value = 1;
+        }
+        existing = assets.find(assetId);
+    }
+    return assetId;
+}
 }
 
 AssetId AssetManager::MakeAssetId(const std::string& path, AssetType type)
@@ -41,25 +72,11 @@ AssetManager::~AssetManager()
 const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::string& outError)
 {
     outError.clear();
-    AssetId assetId = MakeAssetId(path, AssetType::Texture);
 
     {
         std::shared_lock readLock(mapMutex);
-        if (const auto mapped = pathToId.find(path); mapped != pathToId.end()) {
-            if (const auto existing = assets.find(mapped->second); existing != assets.end()) {
-                auto* base = existing->second.get();
-                if (base->type == AssetType::Texture &&
-                    base->state.load(std::memory_order_acquire) == AssetState::Ready) {
-
-                    const AssetHandle<std::unique_ptr<EngineTexture>> typedHandle{
-                        .id = mapped->second,
-                        .generation = static_cast<int>(base->generation),
-                    };
-                    const auto* existingTexture = TryGetTyped<std::unique_ptr<EngineTexture>>(typedHandle, AssetType::Texture);
-                    if (!existingTexture || *existingTexture == nullptr) return nullptr;
-                    return existingTexture->get();
-                }
-            }
+        if (const auto* existingTexture = FindReadyTextureByPathLocked(pathToId, assets, path)) {
+            return existingTexture;
         }
     }
 
@@ -75,54 +92,25 @@ const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::
 
     {
         std::unique_lock writeLock(mapMutex);
-        if (const auto mapped = pathToId.find(path); mapped != pathToId.end()) {
-            if (const auto existing = assets.find(mapped->second); existing != assets.end()) {
-                auto* base = existing->second.get();
-                if (base->type == AssetType::Texture &&
-                    base->state.load(std::memory_order_acquire) == AssetState::Ready) {
-
-                    const AssetHandle<std::unique_ptr<EngineTexture>> typedHandle{
-                        .id = mapped->second,
-                        .generation = static_cast<int>(base->generation),
-                    };
-                    const auto* existingTexture = TryGetTyped<std::unique_ptr<EngineTexture>>(typedHandle, AssetType::Texture);
-                    if (!existingTexture || *existingTexture == nullptr) return nullptr;
-                    return existingTexture->get();
-                    }
-            }
+        if (const auto* existingTexture = FindReadyTextureByPathLocked(pathToId, assets, path)) {
+            return existingTexture;
         }
+
+        const AssetId assetId = FindAvailableTextureAssetIdLocked(assets, MakeAssetId(path, AssetType::Texture), path);
+
+        auto record = std::make_unique<AssetRecord<std::unique_ptr<EngineTexture>>>();
+        record->id = assetId;
+        record->type = AssetType::Texture;
+        record->path = path;
+        record->resource = std::move(texture);
+        record->hasResource = true;
+        record->state.store(AssetState::Ready, std::memory_order_release);
+        record->generation = 1;
+
+        const EngineTexture* loadedTexture = record->resource.get();
+        assets[assetId] = std::move(record);
+        pathToId[path] = assetId;
+
+        return loadedTexture;
     }
-
-    auto existing = assets.find(assetId);
-    while (existing != assets.end()) {
-        const auto* base = existing->second.get();
-        if (base->path == path && base->type == AssetType::Texture) {
-            break;
-        }
-        ++assetId.value;
-        if (assetId.value == 0) {
-            assetId.value = 1;
-        }
-        existing = assets.find(assetId);
-    }
-
-    auto record = std::make_unique<AssetRecord<std::unique_ptr<EngineTexture>>>();
-    record->id = assetId;
-    record->type = AssetType::Texture;
-    record->path = path;
-    record->resource = std::move(texture);
-    record->hasResource = true;
-    record->state.store(AssetState::Ready, std::memory_order_release);
-    record->generation = 1;
-
-    assets[assetId] = std::move(record);
-    pathToId[path] = assetId;
-
-    const AssetHandle<std::unique_ptr<EngineTexture>> typedHandle{
-        .id = assetId,
-        .generation = 1,
-    };
-    const auto* newTexture = TryGetTyped<std::unique_ptr<EngineTexture>>(typedHandle, AssetType::Texture);
-    if (!newTexture || *newTexture == nullptr) return nullptr;
-    return newTexture->get();
 }
