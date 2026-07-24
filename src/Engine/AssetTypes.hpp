@@ -56,7 +56,6 @@ struct AssetRecordBase {
     std::string path;
 
     std::atomic<AssetState> state {AssetState::Unloaded};
-    std::atomic<uint32_t> externalRefs {0};
 
     uint32_t generation {1};
     size_t memoryBytes {0};

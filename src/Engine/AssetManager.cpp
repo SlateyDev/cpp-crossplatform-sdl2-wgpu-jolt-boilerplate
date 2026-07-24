@@ -7,50 +7,50 @@
 
 namespace
 {
-const EngineTexture* GetReadyTextureFromRecord(const AssetRecordBase* base)
-{
-    if (!base || base->type != AssetType::Texture) return nullptr;
-    if (base->state.load(std::memory_order_acquire) != AssetState::Ready) return nullptr;
+    const EngineTexture* GetReadyTextureFromRecord(const AssetRecordBase* base)
+    {
+        if (!base || base->type != AssetType::Texture) return nullptr;
+        if (base->state.load(std::memory_order_acquire) != AssetState::Ready) return nullptr;
 
-    const auto* record = static_cast<const AssetRecord<std::unique_ptr<EngineTexture>>*>(base);
-    if (!record->hasResource || record->resource == nullptr) return nullptr;
-    return record->resource.get();
-}
-
-const EngineTexture* FindReadyTextureByPathLocked(
-    const std::unordered_map<std::string, AssetId>& pathToId,
-    const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
-    const std::string& path)
-{
-    const auto mapped = pathToId.find(path);
-    if (mapped == pathToId.end()) return nullptr;
-
-    const auto existing = assets.find(mapped->second);
-    if (existing == assets.end()) return nullptr;
-
-    return GetReadyTextureFromRecord(existing->second.get());
-}
-
-AssetId FindAvailableTextureAssetIdLocked(
-    const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
-    AssetId assetId,
-    const std::string& path)
-{
-    auto existing = assets.find(assetId);
-    while (existing != assets.end()) {
-        const auto* base = existing->second.get();
-        if (base->path == path && base->type == AssetType::Texture) {
-            break;
-        }
-
-        ++assetId.value;
-        if (assetId.value == 0) {
-            assetId.value = 1;
-        }
-        existing = assets.find(assetId);
+        const auto* record = static_cast<const AssetRecord<std::unique_ptr<EngineTexture>>*>(base);
+        if (!record->hasResource || record->resource == nullptr) return nullptr;
+        return record->resource.get();
     }
-    return assetId;
-}
+
+    const EngineTexture* FindReadyTextureByPathLocked(
+        const std::unordered_map<std::string, AssetId>& pathToId,
+        const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
+        const std::string& path)
+    {
+        const auto mapped = pathToId.find(path);
+        if (mapped == pathToId.end()) return nullptr;
+
+        const auto existing = assets.find(mapped->second);
+        if (existing == assets.end()) return nullptr;
+
+        return GetReadyTextureFromRecord(existing->second.get());
+    }
+
+    AssetId FindAvailableTextureAssetIdLocked(
+        const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
+        AssetId assetId,
+        const std::string& path)
+    {
+        auto existing = assets.find(assetId);
+        while (existing != assets.end()) {
+            const auto* base = existing->second.get();
+            if (base->path == path && base->type == AssetType::Texture) {
+                break;
+            }
+
+            ++assetId.value;
+            if (assetId.value == 0) {
+                assetId.value = 1;
+            }
+            existing = assets.find(assetId);
+        }
+        return assetId;
+    }
 }
 
 AssetId AssetManager::MakeAssetId(const std::string& path, AssetType type)
