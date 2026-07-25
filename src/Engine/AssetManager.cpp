@@ -17,7 +17,7 @@ namespace
         return record->resource.get();
     }
 
-    const EngineTexture* FindReadyTextureByPathLocked(
+    const EngineTexture* FindReadyTextureByPath(
         const std::unordered_map<std::string, AssetId>& pathToId,
         const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
         const std::string& path)
@@ -31,7 +31,7 @@ namespace
         return GetReadyTextureFromRecord(existing->second.get());
     }
 
-    AssetId FindAvailableTextureAssetIdLocked(
+    AssetId FindAvailableTextureAssetId(
         const std::unordered_map<AssetId, std::unique_ptr<AssetRecordBase>>& assets,
         AssetId assetId,
         const std::string& path)
@@ -60,7 +60,7 @@ AssetId AssetManager::MakeAssetId(const std::string& path, AssetType type)
     return AssetId{hashed == 0 ? 1 : hashed};
 }
 
-AssetManager::AssetManager(WGPUDevice device, WGPUQueue queue) : device(device), queue(queue) {}
+AssetManager::AssetManager(const WGPUDevice device, const WGPUQueue queue) : device(device), queue(queue) {}
 
 AssetManager::~AssetManager()
 {
@@ -75,7 +75,7 @@ const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::
 
     {
         std::shared_lock readLock(mapMutex);
-        if (const auto* existingTexture = FindReadyTextureByPathLocked(pathToId, assets, path)) {
+        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, path)) {
             return existingTexture;
         }
     }
@@ -92,11 +92,11 @@ const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::
 
     {
         std::unique_lock writeLock(mapMutex);
-        if (const auto* existingTexture = FindReadyTextureByPathLocked(pathToId, assets, path)) {
+        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, path)) {
             return existingTexture;
         }
 
-        const AssetId assetId = FindAvailableTextureAssetIdLocked(assets, MakeAssetId(path, AssetType::Texture), path);
+        const AssetId assetId = FindAvailableTextureAssetId(assets, MakeAssetId(path, AssetType::Texture), path);
 
         auto record = std::make_unique<AssetRecord<std::unique_ptr<EngineTexture>>>();
         record->id = assetId;

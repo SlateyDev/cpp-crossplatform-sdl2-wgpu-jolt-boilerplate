@@ -4,7 +4,6 @@
 #include <string>
 #include <webgpu/webgpu.h>
 #include <SDL_image.h>
-// #include <glm/glm.hpp>
 
 
 class EngineTexture {
@@ -15,8 +14,6 @@ class EngineTexture {
 
 public:
     bool LoadImage(const std::string& fileName);
-    // EngineTexture(WGPUDevice device, WGPUQueue queue, glm::vec4 colour);
-    // EngineTexture(WGPUDevice device, WGPUQueue queue, int r, int g, int b, int a);
     ~EngineTexture();
 
     bool CreateTextureAndView(WGPUDevice device, WGPUQueue queue);
@@ -25,7 +22,6 @@ public:
 
     // static EngineTexture* FromColour(WGPUDevice device, WGPUQueue queue, glm::vec4 colour);
     // static EngineTexture* FromColour(WGPUDevice device, WGPUQueue queue, int r, int g, int b, int a);
-    // WGPUTextureView CreateView();
 };
 
 #endif
