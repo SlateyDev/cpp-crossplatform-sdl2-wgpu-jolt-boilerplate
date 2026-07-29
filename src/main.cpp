@@ -232,6 +232,10 @@ constexpr uint32_t OVERLAY_LINE_SPACING = 2;
 constexpr uint32_t OVERLAY_MARGIN = 8;
 constexpr float OVERLAY_TEXT_SCALE = 2.0f;
 constexpr size_t OVERLAY_MAX_DEBUG_MESSAGES = 8;
+constexpr uint64_t OVERLAY_MIN_VERTEX_CAPACITY = 4096;
+constexpr size_t OVERLAY_VERTEX_RESERVE_SIZE = 8192;
+constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
+constexpr int FPS_DISPLAY_PRECISION = 1;
 
 struct OverlayVertex {
     glm::vec2 position;
@@ -251,12 +255,12 @@ struct OverlayState {
 
 OverlayState overlayState;
 
-void PushDebugMessage(const std::string &message, const bool isError = false)
+void PushDebugMessage(const std::string &message, const bool logAsError = false)
 {
     if (message.empty()) {
         return;
     }
-    if (isError) {
+    if (logAsError) {
         std::cerr << message << '\n';
     } else {
         std::cout << message << '\n';
@@ -891,8 +895,8 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
 
 std::array<uint8_t, OVERLAY_CHAR_HEIGHT> GetGlyphRows(char c)
 {
-    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    switch (upper) {
+    const char upperChar = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    switch (upperChar) {
         case 'A': return {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
         case 'B': return {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E};
         case 'C': return {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
@@ -1000,7 +1004,7 @@ bool EnsureOverlayVertexBuffer(AppState &app, const uint64_t requiredVertices)
         overlayState.vertexBuffer = nullptr;
         overlayState.vertexCapacity = 0;
     }
-    overlayState.vertexCapacity = std::max<uint64_t>(requiredVertices, 4096u);
+    overlayState.vertexCapacity = std::max<uint64_t>(requiredVertices, OVERLAY_MIN_VERTEX_CAPACITY);
     const WGPUBufferDescriptor descriptor{
         .label = ToWgpuString("Debug Overlay Vertex Buffer"),
         .usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst,
@@ -1146,7 +1150,7 @@ void UpdateFpsCounter()
     const Uint64 elapsed = now - overlayState.fpsCounterStart;
     const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
     const double elapsedSeconds = static_cast<double>(elapsed) / frequency;
-    if (elapsedSeconds >= 0.25) {
+    if (elapsedSeconds >= FPS_UPDATE_INTERVAL_SECONDS) {
         overlayState.currentFps = static_cast<float>(static_cast<double>(overlayState.fpsFrameCount) / elapsedSeconds);
         overlayState.fpsFrameCount = 0;
         overlayState.fpsCounterStart = now;
@@ -1160,10 +1164,10 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
     }
 
     std::vector<OverlayVertex> vertices;
-    vertices.reserve(8192);
+    vertices.reserve(OVERLAY_VERTEX_RESERVE_SIZE);
 
     std::ostringstream fpsStream;
-    fpsStream << std::fixed << std::setprecision(1) << overlayState.currentFps;
+    fpsStream << std::fixed << std::setprecision(FPS_DISPLAY_PRECISION) << overlayState.currentFps;
     const std::string fpsText = "FPS: " + fpsStream.str();
     const float charAdvance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * OVERLAY_TEXT_SCALE;
     const float fpsWidth = static_cast<float>(fpsText.size()) * charAdvance;
