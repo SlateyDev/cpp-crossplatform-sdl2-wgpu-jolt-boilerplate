@@ -4,6 +4,7 @@ This project initializes:
 - **SDL2** for window/canvas creation on both desktop and wasm, can also then be used for input and sound
 - **WebGPU** (`wgpu-native` on desktop, browser WebGPU via Emscripten for wasm)
 - **Jolt Physics**
+- **Recast/Detour navmesh** (basic runtime build + path query)
 
 ## Requirements
 
@@ -72,6 +73,7 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - **Tab**: Toggle mouse-look mode
 - **Esc**: Exit mouse-look mode
 - **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
+- The on-screen debug overlay now also shows `NavMesh` path status.
 
 ## Other build presets
 
@@ -90,6 +92,7 @@ cmake --list-presets=all
 - Desktop builds fetch dependencies with `FetchContent`:
   - `SDL2` from GitHub
   - `JoltPhysics` from GitHub
+  - `RecastNavigation` from GitHub
   - `WebGPU-distribution` from GitHub (which fetches prebuilt `wgpu-native` by default)
 - If your environment already provides these dependencies, set:
 

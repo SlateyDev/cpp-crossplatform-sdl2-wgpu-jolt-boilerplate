@@ -19,6 +19,7 @@ target_compile_features(aberrant_engine PRIVATE cxx_std_20)
 
 if(ABERRANT_USE_SYSTEM_DEPS)
     find_package(glm CONFIG QUIET)
+    find_package(RecastNavigation CONFIG QUIET)
 endif()
 
 if(NOT TARGET glm::glm)
@@ -101,7 +102,14 @@ if(EMSCRIPTEN)
             SOURCE_SUBDIR Build
         )
 
-        FetchContent_MakeAvailable(JoltPhysics WebGPU_Distribution webgpu_headers)
+        FetchContent_Declare(
+            RecastNavigation
+            GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
+            GIT_TAG main
+            GIT_SHALLOW TRUE
+        )
+
+        FetchContent_MakeAvailable(JoltPhysics WebGPU_Distribution webgpu_headers RecastNavigation)
         target_include_directories(aberrant_engine PRIVATE ${webgpu_headers_SOURCE_DIR})
     endif()
 
@@ -191,11 +199,18 @@ else()
             GIT_SHALLOW TRUE
         )
 
+        FetchContent_Declare(
+            RecastNavigation
+            GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
+            GIT_TAG main
+            GIT_SHALLOW TRUE
+        )
+
         set(WEBGPU_BACKEND "WGPU" CACHE STRING "" FORCE)
         set(WEBGPU_BUILD_FROM_SOURCE OFF CACHE BOOL "" FORCE)
         set(WEBGPU_LINK_TYPE "SHARED" CACHE STRING "" FORCE)
 
-        FetchContent_MakeAvailable(SDL2 SDL2_image JoltPhysics WebGPU_Distribution)
+        FetchContent_MakeAvailable(SDL2 SDL2_image JoltPhysics WebGPU_Distribution RecastNavigation)
     endif()
 
     set(WGPU_TARGET "")
@@ -239,4 +254,10 @@ else()
     if(COMMAND target_copy_webgpu_binaries)
         target_copy_webgpu_binaries(aberrant_engine)
     endif()
+endif()
+
+if(TARGET Recast AND TARGET Detour)
+    target_link_libraries(aberrant_engine PRIVATE Recast Detour)
+else()
+    message(FATAL_ERROR "Could not locate Recast/Detour targets (expected: Recast and Detour).")
 endif()

@@ -53,6 +53,7 @@
 
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
+#include "navmesh_runtime.hpp"
 #include "primitive.hpp"
 #include "structures.hpp"
 
@@ -536,6 +537,7 @@ struct OverlayState {
 OverlayState overlayState;
 std::string hoverDebugText = "Hover: None";
 std::string characterDebugText = "Character: Airborne";
+std::string navMeshDebugText = "NavMesh: Not initialized";
 
 void PushDebugMessage(const std::string &message, const bool logAsError = false)
 {
@@ -1487,6 +1489,16 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         app.gpu.width,
         app.gpu.height
     );
+    AppendOverlayText(
+        vertices,
+        navMeshDebugText,
+        static_cast<float>(OVERLAY_MARGIN),
+        statusYStart + 2.0f * (static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING)),
+        OVERLAY_TEXT_SCALE,
+        glm::vec4(0.85f, 0.9f, 0.98f, 1.0f),
+        app.gpu.width,
+        app.gpu.height
+    );
 
     const float lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
     const float usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
@@ -1980,7 +1992,7 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
     return true;
 }
 
-void UpdatePhysicsScene(AppState &app, JoltRuntime &jolt)
+void UpdatePhysicsScene(AppState &app, JoltRuntime &jolt, NavMeshRuntime &navMesh)
 {
     const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
     jolt.ApplyCharacterInput(keyboardState);
@@ -1998,9 +2010,14 @@ void UpdatePhysicsScene(AppState &app, JoltRuntime &jolt)
 
     const std::string hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
     hoverDebugText = hoveredObject.empty() ? "Hover: None" : "Hover: " + hoveredObject;
+
+    std::vector<glm::vec3> navPathPoints;
+    const bool hasPath = navMesh.FindPath(capsuleCharacterObject.translation, gameObject1.translation, navPathPoints);
+    navMeshDebugText = hasPath ? ("NavMesh: Path points " + std::to_string(navPathPoints.size())) : "NavMesh: No path";
 }
 
 JoltRuntime *activeJoltRuntime = nullptr;
+NavMeshRuntime *activeNavMeshRuntime = nullptr;
 
 #if defined(__EMSCRIPTEN__)
 void WasmMainLoop(void *userdata)
@@ -2013,8 +2030,8 @@ void WasmMainLoop(void *userdata)
         return;
     }
     UpdateCameraFromInput(*app);
-    if (activeJoltRuntime != nullptr) {
-        UpdatePhysicsScene(*app, *activeJoltRuntime);
+    if (activeJoltRuntime != nullptr && activeNavMeshRuntime != nullptr) {
+        UpdatePhysicsScene(*app, *activeJoltRuntime, *activeNavMeshRuntime);
     }
     DrawFrame(*app);
 }
@@ -2093,6 +2110,22 @@ int main()
     }
     PushDebugMessage("Jolt collision scene initialized (plane, box, capsule)");
     activeJoltRuntime = &jolt;
+
+    NavMeshRuntime navMesh;
+    const std::vector<float> navMeshVertices = {
+        -20.0f, gameObject3.translation.y, -20.0f,
+         20.0f, gameObject3.translation.y, -20.0f,
+         20.0f, gameObject3.translation.y,  20.0f,
+        -20.0f, gameObject3.translation.y,  20.0f
+    };
+    const std::vector<int> navMeshIndices = {0, 1, 2, 0, 2, 3};
+    if (!navMesh.Build(navMeshVertices, navMeshIndices)) {
+        PushDebugMessage(navMesh.GetStatus(), true);
+        return 1;
+    }
+    navMeshDebugText = navMesh.GetStatus();
+    PushDebugMessage("Recast/Detour navmesh initialized");
+    activeNavMeshRuntime = &navMesh;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
@@ -2601,7 +2634,7 @@ int main()
             break;
         }
         UpdateCameraFromInput(app);
-        UpdatePhysicsScene(app, jolt);
+        UpdatePhysicsScene(app, jolt, navMesh);
         if (!DrawFrame(app)) {
             PushDebugMessage("DrawFrame failed", true);
             break;
@@ -2610,6 +2643,7 @@ int main()
     }
 
     activeJoltRuntime = nullptr;
+    activeNavMeshRuntime = nullptr;
 
     for (const auto& [key, value] : meshes) {
         for (const auto& primitive : value.primitives) {
