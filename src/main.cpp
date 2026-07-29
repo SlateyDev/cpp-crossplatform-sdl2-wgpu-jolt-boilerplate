@@ -165,7 +165,7 @@ public:
         return sceneCreated;
     }
 
-    void ApplyCharacterInput(const float deltaSeconds, const Uint8 *keyboardState)
+    void ApplyCharacterInput(const Uint8 *keyboardState)
     {
         if (!sceneCreated || !physicsSystem || characterBodyId.IsInvalid()) {
             return;
@@ -201,7 +201,6 @@ public:
             bodyInterface.AddImpulse(characterBodyId, JPH::Vec3(0.0f, 8.0f, 0.0f));
         }
         jumpHeld = jumpHeldNow;
-        (void)deltaSeconds;
     }
 
     void StepSimulation(const float deltaSeconds)
@@ -228,7 +227,7 @@ public:
         if (!characterBodyId.IsInvalid()) {
             const JPH::RVec3 position = bodyInterface.GetCenterOfMassPosition(characterBodyId);
             characterObject.translation = glm::vec3(static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ()));
-            characterObject.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            characterObject.rotation = glm::identity<glm::quat>();
         }
     }
 
@@ -1984,7 +1983,7 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
 void UpdatePhysicsScene(AppState &app, JoltRuntime &jolt)
 {
     const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
-    jolt.ApplyCharacterInput(app.frameDeltaSeconds, keyboardState);
+    jolt.ApplyCharacterInput(keyboardState);
     jolt.StepSimulation(app.frameDeltaSeconds);
     jolt.SyncScene(gameObject1, capsuleCharacterObject);
 
