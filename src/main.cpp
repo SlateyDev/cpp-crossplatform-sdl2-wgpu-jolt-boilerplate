@@ -25,16 +25,21 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
@@ -219,6 +224,48 @@ struct FlyCamera : public Camera {
 };
 
 FlyCamera flyCamera;
+
+constexpr uint32_t OVERLAY_CHAR_WIDTH = 5;
+constexpr uint32_t OVERLAY_CHAR_HEIGHT = 7;
+constexpr uint32_t OVERLAY_CHAR_SPACING = 1;
+constexpr uint32_t OVERLAY_LINE_SPACING = 2;
+constexpr uint32_t OVERLAY_MARGIN = 8;
+constexpr float OVERLAY_TEXT_SCALE = 2.0f;
+constexpr size_t OVERLAY_MAX_DEBUG_MESSAGES = 8;
+
+struct OverlayVertex {
+    glm::vec2 position;
+    glm::vec4 color;
+};
+
+struct OverlayState {
+    WGPUShaderModule shader = nullptr;
+    WGPURenderPipeline pipeline = nullptr;
+    WGPUBuffer vertexBuffer = nullptr;
+    uint64_t vertexCapacity = 0;
+    std::deque<std::string> debugMessages;
+    Uint64 fpsCounterStart = 0;
+    uint32_t fpsFrameCount = 0;
+    float currentFps = 0.0f;
+};
+
+OverlayState overlayState;
+
+void PushDebugMessage(const std::string &message, const bool isError = false)
+{
+    if (message.empty()) {
+        return;
+    }
+    if (isError) {
+        std::cerr << message << '\n';
+    } else {
+        std::cout << message << '\n';
+    }
+    overlayState.debugMessages.push_back(message);
+    while (overlayState.debugMessages.size() > OVERLAY_MAX_DEBUG_MESSAGES) {
+        overlayState.debugMessages.pop_front();
+    }
+}
 
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
@@ -842,6 +889,345 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
     }
 }
 
+std::array<uint8_t, OVERLAY_CHAR_HEIGHT> GetGlyphRows(char c)
+{
+    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    switch (upper) {
+        case 'A': return {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
+        case 'B': return {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E};
+        case 'C': return {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
+        case 'D': return {0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C};
+        case 'E': return {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F};
+        case 'F': return {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10};
+        case 'G': return {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F};
+        case 'H': return {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
+        case 'I': return {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F};
+        case 'J': return {0x1F, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C};
+        case 'K': return {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
+        case 'L': return {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F};
+        case 'M': return {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
+        case 'N': return {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11};
+        case 'O': return {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
+        case 'P': return {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
+        case 'Q': return {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D};
+        case 'R': return {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11};
+        case 'S': return {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E};
+        case 'T': return {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
+        case 'U': return {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
+        case 'V': return {0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04};
+        case 'W': return {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A};
+        case 'X': return {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11};
+        case 'Y': return {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04};
+        case 'Z': return {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F};
+        case '0': return {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E};
+        case '1': return {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E};
+        case '2': return {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F};
+        case '3': return {0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E};
+        case '4': return {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02};
+        case '5': return {0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E};
+        case '6': return {0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E};
+        case '7': return {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08};
+        case '8': return {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E};
+        case '9': return {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E};
+        case '.': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C};
+        case ':': return {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00};
+        case '-': return {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
+        case '_': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F};
+        case '/': return {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10};
+        case '\\': return {0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01};
+        case ',': return {0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x08};
+        case '(': return {0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02};
+        case ')': return {0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08};
+        case '[': return {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E};
+        case ']': return {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E};
+        case '!': return {0x04, 0x04, 0x04, 0x04, 0x00, 0x00, 0x04};
+        case ' ': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        default: return {0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
+    }
+}
+
+void AppendOverlayQuad(std::vector<OverlayVertex> &vertices, const float x0, const float y0, const float x1, const float y1,
+                       const glm::vec4 &color, const float width, const float height)
+{
+    const float left = (x0 / width) * 2.0f - 1.0f;
+    const float right = (x1 / width) * 2.0f - 1.0f;
+    const float top = 1.0f - (y0 / height) * 2.0f;
+    const float bottom = 1.0f - (y1 / height) * 2.0f;
+
+    vertices.push_back({glm::vec2(left, top), color});
+    vertices.push_back({glm::vec2(right, top), color});
+    vertices.push_back({glm::vec2(right, bottom), color});
+    vertices.push_back({glm::vec2(left, top), color});
+    vertices.push_back({glm::vec2(right, bottom), color});
+    vertices.push_back({glm::vec2(left, bottom), color});
+}
+
+void AppendOverlayText(std::vector<OverlayVertex> &vertices, const std::string &text, const float x, const float y,
+                       const float scale, const glm::vec4 &color, const uint32_t screenWidth, const uint32_t screenHeight)
+{
+    float cursorX = x;
+    const float advance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * scale;
+    const float pixelSize = scale;
+    for (const char ch : text) {
+        const auto rows = GetGlyphRows(ch);
+        for (uint32_t row = 0; row < OVERLAY_CHAR_HEIGHT; ++row) {
+            for (uint32_t col = 0; col < OVERLAY_CHAR_WIDTH; ++col) {
+                const uint8_t mask = static_cast<uint8_t>(1u << (OVERLAY_CHAR_WIDTH - 1u - col));
+                if ((rows[row] & mask) == 0) {
+                    continue;
+                }
+                const float x0 = cursorX + static_cast<float>(col) * pixelSize;
+                const float y0 = y + static_cast<float>(row) * pixelSize;
+                const float x1 = x0 + pixelSize;
+                const float y1 = y0 + pixelSize;
+                AppendOverlayQuad(vertices, x0, y0, x1, y1, color, static_cast<float>(screenWidth), static_cast<float>(screenHeight));
+            }
+        }
+        cursorX += advance;
+    }
+}
+
+bool EnsureOverlayVertexBuffer(AppState &app, const uint64_t requiredVertices)
+{
+    if (requiredVertices == 0) {
+        return true;
+    }
+    if (overlayState.vertexBuffer != nullptr && overlayState.vertexCapacity >= requiredVertices) {
+        return true;
+    }
+    if (overlayState.vertexBuffer != nullptr) {
+        wgpuBufferRelease(overlayState.vertexBuffer);
+        overlayState.vertexBuffer = nullptr;
+        overlayState.vertexCapacity = 0;
+    }
+    overlayState.vertexCapacity = std::max<uint64_t>(requiredVertices, 4096u);
+    const WGPUBufferDescriptor descriptor{
+        .label = ToWgpuString("Debug Overlay Vertex Buffer"),
+        .usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst,
+        .size = overlayState.vertexCapacity * sizeof(OverlayVertex),
+    };
+    overlayState.vertexBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &descriptor);
+    return overlayState.vertexBuffer != nullptr;
+}
+
+bool CreateOverlayResources(AppState &app)
+{
+    static constexpr char kOverlayShader[] = R"(
+struct VertexInput {
+    @location(0) position : vec2f,
+    @location(1) color : vec4f,
+}
+
+struct VertexOutput {
+    @builtin(position) position : vec4f,
+    @location(0) color : vec4f,
+}
+
+@vertex
+fn vs_main(input : VertexInput) -> VertexOutput {
+    var out : VertexOutput;
+    out.position = vec4f(input.position, 0.0, 1.0);
+    out.color = input.color;
+    return out;
+}
+
+@fragment
+fn fs_main(input : VertexOutput) -> @location(0) vec4f {
+    return input.color;
+}
+)";
+
+    const WGPUShaderSourceWGSL wgslSource{
+        .chain = WGPUChainedStruct{
+            .next = nullptr,
+            .sType = WGPUSType_ShaderSourceWGSL,
+        },
+        .code = ToWgpuString(kOverlayShader),
+    };
+    const WGPUShaderModuleDescriptor shaderDesc{
+        .nextInChain = &wgslSource.chain,
+    };
+    overlayState.shader = wgpuDeviceCreateShaderModule(app.gpu.device, &shaderDesc);
+    if (!overlayState.shader) {
+        return false;
+    }
+
+    const auto blendState = WGPUBlendState{
+        .color = WGPUBlendComponent{
+            .operation = WGPUBlendOperation_Add,
+            .srcFactor = WGPUBlendFactor_SrcAlpha,
+            .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
+        },
+        .alpha = WGPUBlendComponent{
+            .operation = WGPUBlendOperation_Add,
+            .srcFactor = WGPUBlendFactor_One,
+            .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
+        },
+    };
+    const auto colorTarget = WGPUColorTargetState{
+        .format = app.gpu.surfaceConfig.format,
+        .blend = &blendState,
+        .writeMask = WGPUColorWriteMask_All,
+    };
+    const auto fragmentState = WGPUFragmentState{
+        .module = overlayState.shader,
+        .entryPoint = ToWgpuString("fs_main"),
+        .targetCount = 1,
+        .targets = &colorTarget,
+    };
+    const auto attributes = std::to_array<WGPUVertexAttribute>({
+        WGPUVertexAttribute{
+            .format = WGPUVertexFormat_Float32x2,
+            .offset = offsetof(OverlayVertex, position),
+            .shaderLocation = 0,
+        },
+        WGPUVertexAttribute{
+            .format = WGPUVertexFormat_Float32x4,
+            .offset = offsetof(OverlayVertex, color),
+            .shaderLocation = 1,
+        },
+    });
+    const auto vertexBufferLayout = WGPUVertexBufferLayout{
+        .arrayStride = sizeof(OverlayVertex),
+        .stepMode = WGPUVertexStepMode_Vertex,
+        .attributeCount = static_cast<uint32_t>(attributes.size()),
+        .attributes = attributes.data(),
+    };
+    const auto pipelineDesc = WGPURenderPipelineDescriptor{
+        .label = ToWgpuString("Debug Overlay Pipeline"),
+        .layout = nullptr,
+        .vertex = WGPUVertexState{
+            .module = overlayState.shader,
+            .entryPoint = ToWgpuString("vs_main"),
+            .bufferCount = 1,
+            .buffers = &vertexBufferLayout,
+        },
+        .primitive = WGPUPrimitiveState{
+            .topology = WGPUPrimitiveTopology_TriangleList,
+            .stripIndexFormat = WGPUIndexFormat_Undefined,
+            .frontFace = WGPUFrontFace_CCW,
+            .cullMode = WGPUCullMode_None,
+        },
+        .depthStencil = nullptr,
+        .multisample = WGPUMultisampleState{
+            .count = 1,
+            .mask = ~0u,
+        },
+        .fragment = &fragmentState,
+    };
+    overlayState.pipeline = wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
+    return overlayState.pipeline != nullptr;
+}
+
+void ReleaseOverlayResources()
+{
+    if (overlayState.vertexBuffer != nullptr) {
+        wgpuBufferRelease(overlayState.vertexBuffer);
+        overlayState.vertexBuffer = nullptr;
+        overlayState.vertexCapacity = 0;
+    }
+    if (overlayState.pipeline != nullptr) {
+        wgpuRenderPipelineRelease(overlayState.pipeline);
+        overlayState.pipeline = nullptr;
+    }
+    if (overlayState.shader != nullptr) {
+        wgpuShaderModuleRelease(overlayState.shader);
+        overlayState.shader = nullptr;
+    }
+}
+
+void UpdateFpsCounter()
+{
+    const Uint64 now = SDL_GetPerformanceCounter();
+    if (overlayState.fpsCounterStart == 0) {
+        overlayState.fpsCounterStart = now;
+    }
+    overlayState.fpsFrameCount += 1;
+    const Uint64 elapsed = now - overlayState.fpsCounterStart;
+    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    const double elapsedSeconds = static_cast<double>(elapsed) / frequency;
+    if (elapsedSeconds >= 0.25) {
+        overlayState.currentFps = static_cast<float>(static_cast<double>(overlayState.fpsFrameCount) / elapsedSeconds);
+        overlayState.fpsFrameCount = 0;
+        overlayState.fpsCounterStart = now;
+    }
+}
+
+void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
+{
+    if (!overlayState.pipeline) {
+        return;
+    }
+
+    std::vector<OverlayVertex> vertices;
+    vertices.reserve(8192);
+
+    std::ostringstream fpsStream;
+    fpsStream << std::fixed << std::setprecision(1) << overlayState.currentFps;
+    const std::string fpsText = "FPS: " + fpsStream.str();
+    const float charAdvance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * OVERLAY_TEXT_SCALE;
+    const float fpsWidth = static_cast<float>(fpsText.size()) * charAdvance;
+    const float fpsX = std::max(0.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN) - fpsWidth);
+    const float fpsY = static_cast<float>(OVERLAY_MARGIN);
+    AppendOverlayText(
+        vertices,
+        fpsText,
+        fpsX,
+        fpsY,
+        OVERLAY_TEXT_SCALE,
+        glm::vec4(0.9f, 0.95f, 0.2f, 1.0f),
+        app.gpu.width,
+        app.gpu.height
+    );
+
+    const float lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
+    const float usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
+    const float maxCharsPerLine = std::max(
+        1.0f,
+        usableWidth / charAdvance
+    );
+    std::vector<std::string> visibleMessages;
+    visibleMessages.reserve(overlayState.debugMessages.size());
+    for (const auto &message : overlayState.debugMessages) {
+        if (message.empty()) {
+            continue;
+        }
+        std::string line = message;
+        if (line.size() > static_cast<size_t>(maxCharsPerLine)) {
+            line.resize(static_cast<size_t>(maxCharsPerLine));
+        }
+        visibleMessages.push_back(std::move(line));
+    }
+
+    const float debugStartY = std::max(
+        static_cast<float>(OVERLAY_MARGIN),
+        static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN) - lineHeight * static_cast<float>(visibleMessages.size())
+    );
+    for (size_t i = 0; i < visibleMessages.size(); ++i) {
+        AppendOverlayText(
+            vertices,
+            visibleMessages[i],
+            static_cast<float>(OVERLAY_MARGIN),
+            debugStartY + lineHeight * static_cast<float>(i),
+            OVERLAY_TEXT_SCALE,
+            glm::vec4(0.85f, 0.9f, 0.95f, 1.0f),
+            app.gpu.width,
+            app.gpu.height
+        );
+    }
+
+    if (vertices.empty()) {
+        return;
+    }
+    if (!EnsureOverlayVertexBuffer(app, vertices.size())) {
+        return;
+    }
+    wgpuQueueWriteBuffer(app.gpu.queue, overlayState.vertexBuffer, 0, vertices.data(), vertices.size() * sizeof(OverlayVertex));
+    wgpuRenderPassEncoderSetPipeline(pass, overlayState.pipeline);
+    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, overlayState.vertexBuffer, 0, vertices.size() * sizeof(OverlayVertex));
+    wgpuRenderPassEncoderDraw(pass, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+}
+
 bool DrawFrame(AppState &app)
 {
     WGPUSurfaceTexture surfaceTexture{};
@@ -993,6 +1379,7 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderSetBindGroup(pass, 3, app.gpu.shadowBindGroup, 0, nullptr);
 
     RenderObjects(pass);
+    RenderOverlay(app, pass);
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -1161,27 +1548,32 @@ void PumpEvents(AppState &app)
             app.running = false;
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             ConfigureSurface(app);
+            PushDebugMessage("Surface reconfigured after window resize");
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
+            PushDebugMessage("Mouse-look disabled due to focus loss");
         } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT && !app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = true;
+                PushDebugMessage("Mouse-look enabled");
             } else {
-                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to enable mouse-look mode: ") + SDL_GetError(), true);
             }
         } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT && app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_FALSE) == 0) {
                 app.mouseLookEnabled = false;
+                PushDebugMessage("Mouse-look disabled");
             } else {
-                std::cerr << "Failed to disable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to disable mouse-look mode: ") + SDL_GetError(), true);
             }
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
             const bool enableMouseLook = !app.mouseLookEnabled;
             if (!enableMouseLook || SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = enableMouseLook;
+                PushDebugMessage(enableMouseLook ? "Mouse-look enabled" : "Mouse-look disabled");
             } else {
-                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to enable mouse-look mode: ") + SDL_GetError(), true);
             }
             if (!enableMouseLook) {
                 SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -1202,6 +1594,7 @@ void UpdateFrameTiming(AppState &app)
     if (app.lastFrameCounter == 0) {
         app.lastFrameCounter = now;
         app.frameDeltaSeconds = 1.0f / 60.0f;
+        UpdateFpsCounter();
         return;
     }
 
@@ -1210,6 +1603,7 @@ void UpdateFrameTiming(AppState &app)
     const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.frameDeltaSeconds = static_cast<float>(static_cast<double>(elapsed) / frequency);
     app.frameDeltaSeconds = std::clamp(app.frameDeltaSeconds, 0.0f, 0.1f);
+    UpdateFpsCounter();
 }
 
 void UpdateCameraFromInput(AppState &app)
@@ -1324,16 +1718,16 @@ int main()
 
     JoltRuntime jolt;
     if (!jolt.Initialize()) {
-        std::cerr << "Failed to initialize Jolt\n";
+        PushDebugMessage("Failed to initialize Jolt", true);
         return 1;
     }
-    std::cout << "Jolt initialized\n";
+    PushDebugMessage("Jolt initialized");
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
+        PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
         return 1;
     }
-    std::cout << "SDL initialized\n";
+    PushDebugMessage("SDL initialized");
 
     AppState app;
     app.window = SDL_CreateWindow(
@@ -1345,22 +1739,33 @@ int main()
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN
     );
     if (!app.window) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
+        PushDebugMessage(std::string("SDL_CreateWindow failed: ") + SDL_GetError(), true);
         SDL_Quit();
         return 1;
     }
-    std::cout << "SDL window created\n";
+    PushDebugMessage("SDL window created");
 
     if (!InitializeGraphics(app)) {
+        PushDebugMessage("Failed to initialize WebGPU", true);
+        ReleaseOverlayResources();
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 1;
     }
-    std::cout << "WebGPU initialized\n";
+    PushDebugMessage("WebGPU initialized");
 
     shaders["forwardShader"] = createShaderModule(app.gpu.device, "assets/shaders/forward_renderer.wgsl");
     shaders["shadowCaster"] = createShaderModule(app.gpu.device, "assets/shaders/shadow_caster.wgsl");
+    if (!CreateOverlayResources(app)) {
+        PushDebugMessage("Failed to create debug text overlay resources", true);
+        ReleaseOverlayResources();
+        ReleaseGpu(app.gpu);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 1;
+    }
+    PushDebugMessage("Debug text overlay initialized");
 
     AssetManager assetManager(app.gpu.device, app.gpu.queue);
 
@@ -1381,12 +1786,12 @@ int main()
         if (LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
             meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
             objects.push_back(&gameObject2);
-            std::cout << "Loaded glTF model: " << modelPath << "\n";
+            PushDebugMessage("Loaded glTF model: " + modelPath);
         } else {
-            std::cerr << "Failed to load glTF model: " << modelPath << " error: " << loadError << "\n";
+            PushDebugMessage("Failed to load glTF model: " + modelPath + " error: " + loadError, true);
         }
     } else {
-        std::cout << "BoomBox glTF not found, skipping: " << modelPath << "\n";
+        PushDebugMessage("BoomBox glTF not found, skipping: " + modelPath);
     }
 
     WGPUBufferDescriptor lightUniformBufferDesc {
@@ -1610,7 +2015,8 @@ int main()
     std::string sampleTextureError;
     const auto sampleTexture = assetManager.RequestTexture("sample.png", sampleTextureError);
     if (!sampleTexture) {
-        std::cerr << "Failed to load default texture sample.png: " << sampleTextureError << "\n";
+        PushDebugMessage("Failed to load default texture sample.png: " + sampleTextureError, true);
+        ReleaseOverlayResources();
         return 1;
     }
 
@@ -1825,7 +2231,7 @@ int main()
         }
         UpdateCameraFromInput(app);
         if (!DrawFrame(app)) {
-            std::cerr << "DrawFrame failed\n";
+            PushDebugMessage("DrawFrame failed", true);
             break;
         }
         SDL_Delay(16);
@@ -1842,6 +2248,7 @@ int main()
         }
     }
 
+    ReleaseOverlayResources();
     ReleaseGpu(app.gpu);
     SDL_DestroyWindow(app.window);
     SDL_Quit();
