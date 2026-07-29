@@ -11,6 +11,11 @@
 
 namespace {
 
+constexpr int MAX_QUERY_NODES = 2048;
+constexpr int MAX_PATH_POLYGONS = 256;
+constexpr int MAX_STRAIGHT_PATH_POINTS = 256;
+constexpr std::array<float, 3> NEAREST_POLY_HALF_EXTENTS = {2.0f, 4.0f, 2.0f};
+
 class BuildContext final : public rcContext {
 public:
     BuildContext()
@@ -283,7 +288,7 @@ bool NavMeshRuntime::Build(const std::vector<float> &vertices, const std::vector
         return false;
     }
 
-    if (dtStatusFailed(navQuery->init(navMesh, 2048))) {
+    if (dtStatusFailed(navQuery->init(navMesh, MAX_QUERY_NODES))) {
         freeDetailMesh();
         freePolyMesh();
         Reset();
@@ -317,7 +322,7 @@ bool NavMeshRuntime::FindPath(const glm::vec3 &start, const glm::vec3 &end, std:
     dtQueryFilter queryFilter;
     queryFilter.setIncludeFlags(0xffff);
     queryFilter.setExcludeFlags(0);
-    const float halfExtents[3] = {2.0f, 4.0f, 2.0f};
+    const auto halfExtents = NEAREST_POLY_HALF_EXTENTS;
 
     const std::array<float, 3> startPoint = ToDetourVector(start);
     const std::array<float, 3> endPoint = ToDetourVector(end);
@@ -327,22 +332,22 @@ bool NavMeshRuntime::FindPath(const glm::vec3 &start, const glm::vec3 &end, std:
     float nearestStart[3] = {};
     float nearestEnd[3] = {};
 
-    if (dtStatusFailed(navQuery->findNearestPoly(startPoint.data(), halfExtents, &queryFilter, &startReference, nearestStart)) || startReference == 0) {
+    if (dtStatusFailed(navQuery->findNearestPoly(startPoint.data(), halfExtents.data(), &queryFilter, &startReference, nearestStart)) || startReference == 0) {
         return false;
     }
-    if (dtStatusFailed(navQuery->findNearestPoly(endPoint.data(), halfExtents, &queryFilter, &endReference, nearestEnd)) || endReference == 0) {
+    if (dtStatusFailed(navQuery->findNearestPoly(endPoint.data(), halfExtents.data(), &queryFilter, &endReference, nearestEnd)) || endReference == 0) {
         return false;
     }
 
-    std::array<dtPolyRef, 256> polygons{};
+    std::array<dtPolyRef, MAX_PATH_POLYGONS> polygons{};
     int polygonCount = 0;
     if (dtStatusFailed(navQuery->findPath(startReference, endReference, nearestStart, nearestEnd, &queryFilter, polygons.data(), &polygonCount, static_cast<int>(polygons.size()))) || polygonCount <= 0) {
         return false;
     }
 
-    std::array<float, 3 * 256> straightPath{};
-    std::array<unsigned char, 256> straightPathFlags{};
-    std::array<dtPolyRef, 256> straightPathPolygons{};
+    std::array<float, 3 * MAX_STRAIGHT_PATH_POINTS> straightPath{};
+    std::array<unsigned char, MAX_STRAIGHT_PATH_POINTS> straightPathFlags{};
+    std::array<dtPolyRef, MAX_STRAIGHT_PATH_POINTS> straightPathPolygons{};
     int straightPathCount = 0;
     if (dtStatusFailed(navQuery->findStraightPath(
             nearestStart,
@@ -353,7 +358,7 @@ bool NavMeshRuntime::FindPath(const glm::vec3 &start, const glm::vec3 &end, std:
             straightPathFlags.data(),
             straightPathPolygons.data(),
             &straightPathCount,
-            256))) {
+            MAX_STRAIGHT_PATH_POINTS))) {
         return false;
     }
 
