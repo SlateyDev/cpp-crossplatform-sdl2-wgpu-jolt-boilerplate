@@ -105,7 +105,7 @@ if(EMSCRIPTEN)
         FetchContent_Declare(
             RecastNavigation
             GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
-            GIT_TAG main
+            GIT_TAG v1.6.0
             GIT_SHALLOW TRUE
         )
 
@@ -202,7 +202,7 @@ else()
         FetchContent_Declare(
             RecastNavigation
             GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
-            GIT_TAG main
+            GIT_TAG v1.6.0
             GIT_SHALLOW TRUE
         )
 
