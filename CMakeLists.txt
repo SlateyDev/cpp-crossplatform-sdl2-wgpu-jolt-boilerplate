@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(aberrant_engine LANGUAGES CXX)
+project(aberrant_engine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +61,50 @@ endif()
 
 target_link_libraries(aberrant_engine PRIVATE glm::glm)
 target_include_directories(aberrant_engine PRIVATE ${CGLTF_INCLUDE_DIR})
+
+FetchContent_Declare(
+    lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG v5.4.7
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_GetProperties(lua)
+if(NOT lua_POPULATED)
+    FetchContent_Populate(lua)
+endif()
+
+file(GLOB LUA_SOURCES CONFIGURE_DEPENDS ${lua_SOURCE_DIR}/*.c)
+list(REMOVE_ITEM LUA_SOURCES ${lua_SOURCE_DIR}/lua.c ${lua_SOURCE_DIR}/luac.c)
+
+add_library(lua_static STATIC ${LUA_SOURCES})
+target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR})
+if(UNIX AND NOT APPLE)
+    target_compile_definitions(lua_static PRIVATE LUA_USE_LINUX)
+elseif(APPLE)
+    target_compile_definitions(lua_static PRIVATE LUA_USE_MACOSX)
+endif()
+
+FetchContent_Declare(
+    wren
+    GIT_REPOSITORY https://github.com/wren-lang/wren.git
+    GIT_TAG 0.4.0
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_GetProperties(wren)
+if(NOT wren_POPULATED)
+    FetchContent_Populate(wren)
+endif()
+
+file(GLOB WREN_SOURCES CONFIGURE_DEPENDS ${wren_SOURCE_DIR}/src/vm/*.c ${wren_SOURCE_DIR}/src/optional/*.c)
+add_library(wren_static STATIC ${WREN_SOURCES})
+target_include_directories(wren_static
+    PUBLIC ${wren_SOURCE_DIR}/src/include
+    PRIVATE ${wren_SOURCE_DIR}/src/vm ${wren_SOURCE_DIR}/src/optional
+)
+
+target_link_libraries(aberrant_engine PRIVATE lua_static wren_static)
 
 if(MSVC)
     set_property(TARGET aberrant_engine PROPERTY

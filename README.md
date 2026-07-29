@@ -80,6 +80,8 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - Supports:
   - `print <message>` to print a message in the console
   - `add <number1> <number2>` to print a numeric sum
+  - `lua <script>` to execute Lua script code (example: `lua print("hello from lua")`)
+  - `wren <script>` to execute Wren script code (example: `wren System.print("hello from wren")`)
 
 ## Other build presets
 
