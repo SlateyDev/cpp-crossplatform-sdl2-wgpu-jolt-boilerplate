@@ -21,6 +21,7 @@ public:
 
     int PlaySoundEffect(const std::string& name, int loops = 0) const;
     bool PlayMusic(const std::string& name, int loops = -1) const;
+    bool IsMusicPlaying() const;
     void StopMusic() const;
     bool IsInitialized() const;
 

@@ -169,7 +169,6 @@ constexpr const char* DEFAULT_SFX_NAME = "default_sfx";
 constexpr const char* DEFAULT_MUSIC_NAME = "default_music";
 constexpr const char* DEFAULT_SFX_PATH = "assets/audio/sfx.wav";
 constexpr const char* DEFAULT_MUSIC_PATH = "assets/audio/music.ogg";
-bool musicPlaying = false;
 
 constexpr WGPUTextureFormat DEPTH_FORMAT = WGPUTextureFormat_Depth32Float;
 
@@ -1202,12 +1201,10 @@ void PumpEvents(AppState &app)
                 std::cerr << "Failed to play sound effect '" << DEFAULT_SFX_NAME << "': " << Mix_GetError() << '\n';
             }
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_M) {
-            if (musicPlaying) {
+            if (audioManager.IsMusicPlaying()) {
                 audioManager.StopMusic();
-                musicPlaying = false;
             } else {
-                musicPlaying = audioManager.PlayMusic(DEFAULT_MUSIC_NAME, -1);
-                if (!musicPlaying) {
+                if (!audioManager.PlayMusic(DEFAULT_MUSIC_NAME, -1)) {
                     std::cerr << "Failed to play music '" << DEFAULT_MUSIC_NAME << "': " << Mix_GetError() << '\n';
                 }
             }

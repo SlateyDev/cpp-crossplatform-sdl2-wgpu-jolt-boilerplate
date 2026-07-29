@@ -32,7 +32,11 @@ bool AudioManager::Initialize(std::string& outError, const int mixingChannels)
         return false;
     }
 
-    Mix_AllocateChannels(mixingChannels);
+    if (Mix_AllocateChannels(mixingChannels) < 1) {
+        outError = Mix_GetError();
+        Mix_CloseAudio();
+        return false;
+    }
     initialized = true;
     return true;
 }
@@ -109,6 +113,11 @@ bool AudioManager::PlayMusic(const std::string& name, const int loops) const
         return false;
     }
     return Mix_PlayMusic(found->second.get(), loops) == 0;
+}
+
+bool AudioManager::IsMusicPlaying() const
+{
+    return initialized && Mix_PlayingMusic() != 0;
 }
 
 void AudioManager::StopMusic() const
