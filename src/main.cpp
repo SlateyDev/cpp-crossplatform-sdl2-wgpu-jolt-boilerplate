@@ -239,6 +239,7 @@ constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
 constexpr int FPS_DISPLAY_PRECISION = 1;
 constexpr float OVERLAY_CONSOLE_HEIGHT_RATIO = 0.4f;
 constexpr size_t OVERLAY_MAX_CONSOLE_INPUT_LENGTH = 96;
+constexpr int CONSOLE_RESULT_PRECISION = 10;
 
 struct OverlayVertex {
     glm::vec2 position;
@@ -300,9 +301,13 @@ void PushConsoleLine(const std::string &message)
 
 bool ParseDoubleArgument(const std::string &text, double &outValue)
 {
+    if (text.empty()) {
+        return false;
+    }
     char *endPtr = nullptr;
+    const char *startPtr = text.c_str();
     outValue = std::strtod(text.c_str(), &endPtr);
-    return endPtr != nullptr && *endPtr == '\0';
+    return endPtr != startPtr && *endPtr == '\0';
 }
 
 void ExecuteConsoleCommand(const std::string &commandLine)
@@ -352,12 +357,27 @@ void ExecuteConsoleCommand(const std::string &commandLine)
 
         const double result = leftValue + rightValue;
         std::ostringstream resultStream;
-        resultStream << std::setprecision(10) << result;
+        resultStream << std::setprecision(CONSOLE_RESULT_PRECISION) << result;
         PushConsoleLine("Result: " + resultStream.str());
         return;
     }
 
     PushConsoleLine("Unknown command: " + command);
+}
+
+void SetConsoleOpen(AppState &app, const bool open)
+{
+    overlayState.consoleOpen = open;
+    if (overlayState.consoleOpen) {
+        overlayState.consoleInput.clear();
+        app.mouseLookEnabled = false;
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_StartTextInput();
+        PushConsoleLine("Console opened");
+        return;
+    }
+    SDL_StopTextInput();
+    PushConsoleLine("Console closed");
 }
 
 struct alignas(16) RotationUniform {
@@ -1372,7 +1392,13 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
 
         std::string inputLine = "Input: " + overlayState.consoleInput + "_";
         if (inputLine.size() > maxConsoleChars) {
-            inputLine = inputLine.substr(inputLine.size() - maxConsoleChars);
+            const std::string marker = "Input: ...";
+            if (maxConsoleChars > marker.size()) {
+                const size_t tailSize = maxConsoleChars - marker.size();
+                inputLine = marker + inputLine.substr(inputLine.size() - tailSize);
+            } else {
+                inputLine = inputLine.substr(0, maxConsoleChars);
+            }
         }
         AppendOverlayText(
             vertices,
@@ -1724,17 +1750,7 @@ void PumpEvents(AppState &app)
             SDL_SetRelativeMouseMode(SDL_FALSE);
             PushDebugMessage("Mouse-look disabled due to focus loss");
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
-            overlayState.consoleOpen = !overlayState.consoleOpen;
-            if (overlayState.consoleOpen) {
-                overlayState.consoleInput.clear();
-                app.mouseLookEnabled = false;
-                SDL_SetRelativeMouseMode(SDL_FALSE);
-                SDL_StartTextInput();
-                PushConsoleLine("Console opened");
-            } else {
-                SDL_StopTextInput();
-                PushConsoleLine("Console closed");
-            }
+            SetConsoleOpen(app, !overlayState.consoleOpen);
             continue;
         } else if (overlayState.consoleOpen && ev.type == SDL_TEXTINPUT) {
             for (size_t i = 0; ev.text.text[i] != '\0'; ++i) {
@@ -1755,9 +1771,7 @@ void PumpEvents(AppState &app)
                 ExecuteConsoleCommand(overlayState.consoleInput);
                 overlayState.consoleInput.clear();
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-                overlayState.consoleOpen = false;
-                SDL_StopTextInput();
-                PushConsoleLine("Console closed");
+                SetConsoleOpen(app, false);
             }
             continue;
         } else if (overlayState.consoleOpen) {
