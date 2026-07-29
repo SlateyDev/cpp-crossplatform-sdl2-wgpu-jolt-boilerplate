@@ -43,6 +43,7 @@
 
 #include "Engine/GameObject.hpp"
 #include "Engine/AssetManager.hpp"
+#include "Engine/AudioManager.hpp"
 #include "Engine/EngineTexture.hpp"
 
 namespace {
@@ -162,6 +163,13 @@ std::vector<MeshInstance*> objects;
 MeshInstance gameObject1;
 MeshInstance gameObject2;
 MeshInstance gameObject3;
+
+AudioManager audioManager;
+constexpr const char* DEFAULT_SFX_NAME = "default_sfx";
+constexpr const char* DEFAULT_MUSIC_NAME = "default_music";
+constexpr const char* DEFAULT_SFX_PATH = "assets/audio/sfx.wav";
+constexpr const char* DEFAULT_MUSIC_PATH = "assets/audio/music.ogg";
+bool musicPlaying = false;
 
 constexpr WGPUTextureFormat DEPTH_FORMAT = WGPUTextureFormat_Depth32Float;
 
@@ -1189,6 +1197,20 @@ void PumpEvents(AppState &app)
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_1) {
+            if (audioManager.PlaySoundEffect(DEFAULT_SFX_NAME) < 0) {
+                std::cerr << "Failed to play sound effect '" << DEFAULT_SFX_NAME << "': " << Mix_GetError() << '\n';
+            }
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_M) {
+            if (musicPlaying) {
+                audioManager.StopMusic();
+                musicPlaying = false;
+            } else {
+                musicPlaying = audioManager.PlayMusic(DEFAULT_MUSIC_NAME, -1);
+                if (!musicPlaying) {
+                    std::cerr << "Failed to play music '" << DEFAULT_MUSIC_NAME << "': " << Mix_GetError() << '\n';
+                }
+            }
         } else if (ev.type == SDL_MOUSEMOTION && app.mouseLookEnabled) {
             app.mouseDeltaX += static_cast<float>(ev.motion.xrel);
             app.mouseDeltaY += static_cast<float>(ev.motion.yrel);
@@ -1335,6 +1357,31 @@ int main()
     }
     std::cout << "SDL initialized\n";
 
+    std::string audioError;
+    if (!audioManager.Initialize(audioError, 32)) {
+        std::cerr << "Audio initialization failed: " << audioError << '\n';
+    } else {
+        if (std::filesystem::exists(DEFAULT_SFX_PATH)) {
+            if (!audioManager.LoadSoundEffect(DEFAULT_SFX_NAME, DEFAULT_SFX_PATH, audioError)) {
+                std::cerr << "Failed to load sound effect from " << DEFAULT_SFX_PATH << ": " << audioError << '\n';
+            } else {
+                std::cout << "Loaded sound effect: " << DEFAULT_SFX_PATH << '\n';
+            }
+        } else {
+            std::cout << "No default sound effect found at " << DEFAULT_SFX_PATH << '\n';
+        }
+
+        if (std::filesystem::exists(DEFAULT_MUSIC_PATH)) {
+            if (!audioManager.LoadMusic(DEFAULT_MUSIC_NAME, DEFAULT_MUSIC_PATH, audioError)) {
+                std::cerr << "Failed to load music from " << DEFAULT_MUSIC_PATH << ": " << audioError << '\n';
+            } else {
+                std::cout << "Loaded music track: " << DEFAULT_MUSIC_PATH << '\n';
+            }
+        } else {
+            std::cout << "No default music track found at " << DEFAULT_MUSIC_PATH << '\n';
+        }
+    }
+
     AppState app;
     app.window = SDL_CreateWindow(
         "Sizzle Engine",
@@ -1346,6 +1393,7 @@ int main()
     );
     if (!app.window) {
         std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
+        audioManager.Shutdown();
         SDL_Quit();
         return 1;
     }
@@ -1354,6 +1402,7 @@ int main()
     if (!InitializeGraphics(app)) {
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
+        audioManager.Shutdown();
         SDL_Quit();
         return 1;
     }
@@ -1843,6 +1892,7 @@ int main()
     }
 
     ReleaseGpu(app.gpu);
+    audioManager.Shutdown();
     SDL_DestroyWindow(app.window);
     SDL_Quit();
     return 0;

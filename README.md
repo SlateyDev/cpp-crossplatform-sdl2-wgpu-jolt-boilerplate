@@ -72,6 +72,16 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - **Tab**: Toggle mouse-look mode
 - **Esc**: Exit mouse-look mode
 - **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
+- **1**: Play `assets/audio/sfx.wav` (supports overlapping playback on multiple channels)
+- **M**: Toggle looping `assets/audio/music.ogg`
+
+## Audio playback
+
+- The engine now initializes **SDL_mixer** and allocates 32 mixing channels for simultaneous sound effects.
+- Music playback is independent from SFX playback, so background music and multiple effects can run together.
+- To test playback, add:
+  - `assets/audio/sfx.wav`
+  - `assets/audio/music.ogg`
 
 ## Other build presets
 
