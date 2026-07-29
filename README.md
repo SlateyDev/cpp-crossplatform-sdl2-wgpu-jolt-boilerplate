@@ -72,6 +72,14 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - **Tab**: Toggle mouse-look mode
 - **Esc**: Exit mouse-look mode
 - **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
+- **Tilde (`~`)**: Toggle developer console
+
+## Developer console
+
+- Opens with **tilde (`~`)**
+- Supports:
+  - `print <message>` to print a message in the console
+  - `add <number1> <number2>` to print a numeric sum
 
 ## Other build presets
 
