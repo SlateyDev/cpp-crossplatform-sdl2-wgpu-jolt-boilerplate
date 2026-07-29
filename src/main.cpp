@@ -319,16 +319,16 @@ bool ParseDoubleArgument(const std::string &text, double &outValue)
 
 int LuaConsolePrint(lua_State *state)
 {
-    const int argumentCount = lua_gettop(state);
+    const int argument_count = lua_gettop(state);
     std::ostringstream output;
-    for (int i = 1; i <= argumentCount; ++i) {
+    for (int i = 1; i <= argument_count; ++i) {
         if (i > 1) {
             output << '\t';
         }
         size_t length = 0;
-        const char *value = luaL_tolstring(state, i, &length);
-        if (value != nullptr) {
-            output.write(value, static_cast<std::streamsize>(length));
+        const char *string_value = luaL_tolstring(state, i, &length);
+        if (string_value != nullptr) {
+            output.write(string_value, static_cast<std::streamsize>(length));
         }
         lua_pop(state, 1);
     }
@@ -338,38 +338,6 @@ int LuaConsolePrint(lua_State *state)
         PushConsoleLine("[lua] " + message);
     }
     return 0;
-}
-
-bool ExecuteLuaScript(const std::string &script)
-{
-    lua_State *state = luaL_newstate();
-    if (state == nullptr) {
-        PushConsoleLine("[lua] Failed to create VM");
-        return false;
-    }
-
-    luaL_openlibs(state);
-    lua_pushcfunction(state, LuaConsolePrint);
-    lua_setglobal(state, "print");
-
-    const int loadStatus = luaL_loadstring(state, script.c_str());
-    if (loadStatus != LUA_OK) {
-        const char *errorMessage = lua_tostring(state, -1);
-        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
-        lua_close(state);
-        return false;
-    }
-
-    const int executeStatus = lua_pcall(state, 0, LUA_MULTRET, 0);
-    if (executeStatus != LUA_OK) {
-        const char *errorMessage = lua_tostring(state, -1);
-        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
-        lua_close(state);
-        return false;
-    }
-
-    lua_close(state);
-    return true;
 }
 
 void WrenConsoleWrite(WrenVM *, const char *text)
@@ -416,21 +384,86 @@ void WrenConsoleError(WrenVM *, WrenErrorType type, const char *module, int line
     PushConsoleLine(output.str());
 }
 
-bool ExecuteWrenScript(const std::string &script)
+struct ScriptingState {
+    lua_State *luaState = nullptr;
+    WrenVM *wrenVm = nullptr;
+};
+
+ScriptingState scriptingState;
+
+bool InitializeScripting()
 {
+    scriptingState.luaState = luaL_newstate();
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] Failed to create VM");
+        return false;
+    }
+    luaL_openlibs(scriptingState.luaState);
+    lua_pushcfunction(scriptingState.luaState, LuaConsolePrint);
+    lua_setglobal(scriptingState.luaState, "print");
+
     WrenConfiguration config;
     wrenInitConfiguration(&config);
     config.writeFn = WrenConsoleWrite;
     config.errorFn = WrenConsoleError;
-
-    WrenVM *vm = wrenNewVM(&config);
-    if (vm == nullptr) {
+    scriptingState.wrenVm = wrenNewVM(&config);
+    if (scriptingState.wrenVm == nullptr) {
         PushConsoleLine("[wren] Failed to create VM");
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void ShutdownScripting()
+{
+    if (scriptingState.wrenVm != nullptr) {
+        wrenFreeVM(scriptingState.wrenVm);
+        scriptingState.wrenVm = nullptr;
+    }
+    if (scriptingState.luaState != nullptr) {
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+    }
+}
+
+bool ExecuteLuaScript(const std::string &script)
+{
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] VM is not initialized");
         return false;
     }
 
-    const WrenInterpretResult result = wrenInterpret(vm, "main", script.c_str());
-    wrenFreeVM(vm);
+    lua_settop(scriptingState.luaState, 0);
+    const int loadStatus = luaL_loadstring(scriptingState.luaState, script.c_str());
+    if (loadStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    const int executeStatus = lua_pcall(scriptingState.luaState, 0, LUA_MULTRET, 0);
+    if (executeStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    lua_settop(scriptingState.luaState, 0);
+    return true;
+}
+
+bool ExecuteWrenScript(const std::string &script)
+{
+    if (scriptingState.wrenVm == nullptr) {
+        PushConsoleLine("[wren] VM is not initialized");
+        return false;
+    }
+
+    const WrenInterpretResult result = wrenInterpret(scriptingState.wrenVm, "main", script.c_str());
     return result == WREN_RESULT_SUCCESS;
 }
 
@@ -2596,6 +2629,16 @@ int main()
         return wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
     }();
 
+    if (!InitializeScripting()) {
+        PushDebugMessage("Failed to initialize scripting runtimes", true);
+        ReleaseOverlayResources();
+        ReleaseGpu(app.gpu);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 1;
+    }
+    PushDebugMessage("Scripting runtimes initialized");
+
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop_arg(WasmMainLoop, &app, 0, 1);
     return 0;
@@ -2625,6 +2668,7 @@ int main()
         }
     }
 
+    ShutdownScripting();
     ReleaseOverlayResources();
     ReleaseGpu(app.gpu);
     SDL_DestroyWindow(app.window);
