@@ -860,12 +860,12 @@ std::vector<MeshInstance*> CollectVisibleObjects(Frustum& frustum) {
     std::vector<MeshInstance*> visibleObjects;
     visibleObjects.reserve(objects.size());
 
-    for (const auto& object : objects) {
-        if (!object) {
+    for (const auto& meshInstance : objects) {
+        if (!meshInstance) {
             continue;
         }
-        if (IsObjectVisible(*object, frustum)) {
-            visibleObjects.push_back(object);
+        if (IsObjectVisible(*meshInstance, frustum)) {
+            visibleObjects.push_back(meshInstance);
         }
     }
 
