@@ -1092,8 +1092,8 @@ fn fs_main(input : VertexOutput) -> @location(0) vec4f {
         },
     });
     const auto vertexBufferLayout = WGPUVertexBufferLayout{
-        .arrayStride = sizeof(OverlayVertex),
         .stepMode = WGPUVertexStepMode_Vertex,
+        .arrayStride = sizeof(OverlayVertex),
         .attributeCount = static_cast<uint32_t>(attributes.size()),
         .attributes = attributes.data(),
     };
@@ -1383,10 +1383,27 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderSetBindGroup(pass, 3, app.gpu.shadowBindGroup, 0, nullptr);
 
     RenderObjects(pass);
-    RenderOverlay(app, pass);
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
+
+    WGPURenderPassColorAttachment colorAttachment2 {
+        .view = view,
+        .depthSlice = WGPU_DEPTH_SLICE_UNDEFINED,
+        .loadOp = WGPULoadOp_Load,
+        .storeOp = WGPUStoreOp_Store,
+    };
+
+    WGPURenderPassDescriptor passDesc2 {
+        .colorAttachmentCount = 1,
+        .colorAttachments = &colorAttachment2,
+    };
+
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
+    RenderOverlay(app, pass);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+
 
 #ifdef TRIANGLE_SAMPLE
     passDesc.depthStencilAttachment = nullptr;
