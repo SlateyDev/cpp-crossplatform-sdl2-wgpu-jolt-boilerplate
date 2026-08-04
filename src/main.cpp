@@ -232,6 +232,10 @@ constexpr Uint64 OVERLAY_MIN_VERTEX_CAPACITY = 4096;
 constexpr size_t OVERLAY_VERTEX_RESERVE_SIZE = 8192;
 constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
 constexpr int FPS_DISPLAY_PRECISION = 1;
+constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 32;
+constexpr float OVERLAY_CONSOLE_HEIGHT_RATIO = 0.4f;
+constexpr size_t OVERLAY_MAX_CONSOLE_INPUT_LENGTH = 96;
+constexpr int CONSOLE_RESULT_PRECISION = 10;
 
 struct OverlayVertex {
     glm::vec2 position;
@@ -244,6 +248,9 @@ struct OverlayState {
     WGPUBuffer vertexBuffer = nullptr;
     Uint64 vertexCapacity = 0;
     std::deque<std::string> debugMessages;
+    std::deque<std::string> consoleLines;
+    std::string consoleInput;
+    bool consoleOpen = false;
     Uint64 fpsCounterStart = 0;
     Uint32 fpsFrameCount = 0;
     float currentFps = 0.0f;
@@ -265,6 +272,108 @@ void PushDebugMessage(const std::string &message, const bool logAsError = false)
     while (overlayState.debugMessages.size() > OVERLAY_MAX_DEBUG_MESSAGES) {
         overlayState.debugMessages.pop_front();
     }
+}
+
+std::string TrimWhitespace(const std::string &value)
+{
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+void PushConsoleLine(const std::string &message)
+{
+    if (message.empty()) {
+        return;
+    }
+    overlayState.consoleLines.push_back(message);
+    while (overlayState.consoleLines.size() > OVERLAY_MAX_CONSOLE_LINES) {
+        overlayState.consoleLines.pop_front();
+    }
+}
+
+bool ParseDoubleArgument(const std::string &text, double &outValue)
+{
+    if (text.empty()) {
+        return false;
+    }
+    char *endPtr = nullptr;
+    const char *startPtr = text.c_str();
+    outValue = std::strtod(text.c_str(), &endPtr);
+    return endPtr != startPtr && *endPtr == '\0';
+}
+
+void ExecuteConsoleCommand(const std::string &commandLine)
+{
+    const std::string trimmed = TrimWhitespace(commandLine);
+    if (trimmed.empty()) {
+        return;
+    }
+
+    PushConsoleLine("CMD: " + trimmed);
+
+    std::istringstream stream(trimmed);
+    std::string command;
+    stream >> command;
+    std::ranges::transform(command, command.begin(), [](const unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    if (command == "print") {
+        std::string message;
+        std::getline(stream, message);
+        message = TrimWhitespace(message);
+        if (message.empty()) {
+            PushConsoleLine("Usage: print <message>");
+        } else {
+            PushConsoleLine(message);
+        }
+        return;
+    }
+
+    if (command == "add") {
+        std::string left;
+        std::string right;
+        std::string extra;
+        stream >> left >> right >> extra;
+        if (left.empty() || right.empty() || !extra.empty()) {
+            PushConsoleLine("Usage: add <number1> <number2>");
+            return;
+        }
+
+        double leftValue = 0.0;
+        double rightValue = 0.0;
+        if (!ParseDoubleArgument(left, leftValue) || !ParseDoubleArgument(right, rightValue)) {
+            PushConsoleLine("add expects numeric arguments");
+            return;
+        }
+
+        const double result = leftValue + rightValue;
+        std::ostringstream resultStream;
+        resultStream << std::setprecision(CONSOLE_RESULT_PRECISION) << result;
+        PushConsoleLine("Result: " + resultStream.str());
+        return;
+    }
+
+    PushConsoleLine("Unknown command: " + command);
+}
+
+void SetConsoleOpen(AppState &app, const bool open)
+{
+    overlayState.consoleOpen = open;
+    if (overlayState.consoleOpen) {
+        overlayState.consoleInput.clear();
+        app.mouseLookEnabled = false;
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_StartTextInput();
+        PushConsoleLine("Console opened");
+        return;
+    }
+    SDL_StopTextInput();
+    PushConsoleLine("Console closed");
 }
 
 struct alignas(16) RotationUniform {
@@ -1189,6 +1298,89 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         );
     }
 
+    if (overlayState.consoleOpen) {
+        const float panelX = static_cast<float>(OVERLAY_MARGIN);
+        const float panelY = static_cast<float>(OVERLAY_MARGIN);
+        const float panelWidth = std::max(1.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN * 2));
+        const float panelHeight = std::max(
+            lineHeight * 4.0f,
+            static_cast<float>(app.gpu.height) * OVERLAY_CONSOLE_HEIGHT_RATIO
+        );
+        const float panelBottom = std::min(
+            static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN),
+            panelY + panelHeight
+        );
+        AppendOverlayQuad(
+            vertices,
+            panelX,
+            panelY,
+            panelX + panelWidth,
+            panelBottom,
+            glm::vec4(0.03f, 0.03f, 0.06f, 0.82f),
+            static_cast<float>(app.gpu.width),
+            static_cast<float>(app.gpu.height)
+        );
+
+        const float consoleTextX = panelX + static_cast<float>(OVERLAY_MARGIN);
+        const float consoleTitleY = panelY + static_cast<float>(OVERLAY_MARGIN);
+        const float consoleInputY = panelBottom - static_cast<float>(OVERLAY_MARGIN) - lineHeight;
+        const float textAreaHeight = std::max(0.0f, consoleInputY - (consoleTitleY + lineHeight));
+        const size_t maxHistoryLines = std::max<size_t>(1, static_cast<size_t>(textAreaHeight / lineHeight));
+
+        AppendOverlayText(
+            vertices,
+            "Console",
+            consoleTextX,
+            consoleTitleY,
+            OVERLAY_TEXT_SCALE,
+            glm::vec4(0.9f, 0.95f, 1.0f, 1.0f),
+            app.gpu.width,
+            app.gpu.height
+        );
+
+        const size_t linesToDraw = std::min(maxHistoryLines, overlayState.consoleLines.size());
+        const size_t lineStart = overlayState.consoleLines.size() - linesToDraw;
+        const float consoleTextWidth = std::max(1.0f, panelWidth - static_cast<float>(OVERLAY_MARGIN * 2));
+        const size_t maxConsoleChars = std::max<size_t>(1, static_cast<size_t>(consoleTextWidth / charAdvance));
+        for (size_t i = 0; i < linesToDraw; ++i) {
+            std::string line = overlayState.consoleLines[lineStart + i];
+            if (line.size() > maxConsoleChars) {
+                line.resize(maxConsoleChars);
+            }
+            AppendOverlayText(
+                vertices,
+                line,
+                consoleTextX,
+                consoleTitleY + lineHeight * static_cast<float>(i + 1),
+                OVERLAY_TEXT_SCALE,
+                glm::vec4(0.8f, 0.9f, 0.95f, 1.0f),
+                app.gpu.width,
+                app.gpu.height
+            );
+        }
+
+        std::string inputLine = "Input: " + overlayState.consoleInput + "_";
+        if (inputLine.size() > maxConsoleChars) {
+            const std::string marker = "Input: ...";
+            if (maxConsoleChars > marker.size()) {
+                const size_t tailSize = maxConsoleChars - marker.size();
+                inputLine = marker + inputLine.substr(inputLine.size() - tailSize);
+            } else {
+                inputLine = inputLine.substr(0, maxConsoleChars);
+            }
+        }
+        AppendOverlayText(
+            vertices,
+            inputLine,
+            consoleTextX,
+            consoleInputY,
+            OVERLAY_TEXT_SCALE,
+            glm::vec4(0.95f, 0.95f, 0.95f, 1.0f),
+            app.gpu.width,
+            app.gpu.height
+        );
+    }
+
     if (vertices.empty()) {
         return;
     }
@@ -1373,7 +1565,6 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
-
 #ifdef TRIANGLE_SAMPLE
     passDesc.depthStencilAttachment = nullptr;
     pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
@@ -1543,6 +1734,30 @@ void PumpEvents(AppState &app)
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
             PushDebugMessage("Mouse-look disabled due to focus loss");
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
+            SetConsoleOpen(app, !overlayState.consoleOpen);
+        } else if (overlayState.consoleOpen && ev.type == SDL_TEXTINPUT) {
+            for (size_t i = 0; ev.text.text[i] != '\0'; ++i) {
+                const unsigned char ch = static_cast<unsigned char>(ev.text.text[i]);
+                if (ch < 32u || ch > 126u) {
+                    continue;
+                }
+                if (overlayState.consoleInput.size() >= OVERLAY_MAX_CONSOLE_INPUT_LENGTH) {
+                    break;
+                }
+                overlayState.consoleInput.push_back(static_cast<char>(ch));
+            }
+        } else if (overlayState.consoleOpen && ev.type == SDL_KEYDOWN) {
+            if (ev.key.keysym.scancode == SDL_SCANCODE_BACKSPACE && !overlayState.consoleInput.empty()) {
+                overlayState.consoleInput.pop_back();
+            } else if (ev.key.keysym.scancode == SDL_SCANCODE_RETURN || ev.key.keysym.scancode == SDL_SCANCODE_KP_ENTER) {
+                ExecuteConsoleCommand(overlayState.consoleInput);
+                overlayState.consoleInput.clear();
+            } else if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                SetConsoleOpen(app, false);
+            }
+        } else if (overlayState.consoleOpen) {
+            // STOP PROCESSING FURTHER EVENTS BECAUSE CONSOLE IS OPEN
         } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT && !app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = true;
@@ -1622,6 +1837,12 @@ void UpdateFrameTiming(AppState &app)
 
 void UpdateCameraFromInput(AppState &app)
 {
+    if (overlayState.consoleOpen) {
+        app.mouseDeltaX = 0.0f;
+        app.mouseDeltaY = 0.0f;
+        return;
+    }
+
     const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
     float moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
     if (keyboardState[SDL_SCANCODE_LSHIFT] || keyboardState[SDL_SCANCODE_RSHIFT]) {
@@ -1741,6 +1962,7 @@ int main()
         PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
         return 1;
     }
+    SDL_StopTextInput();
     PushDebugMessage("SDL initialized");
 
     AppState app;
