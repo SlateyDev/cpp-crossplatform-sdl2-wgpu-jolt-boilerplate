@@ -25,21 +25,17 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
-#include <vector>
 
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
@@ -225,18 +221,18 @@ struct FlyCamera : public Camera {
 
 FlyCamera flyCamera;
 
-constexpr uint32_t OVERLAY_CHAR_WIDTH = 5;
-constexpr uint32_t OVERLAY_CHAR_HEIGHT = 7;
-constexpr uint32_t OVERLAY_CHAR_SPACING = 1;
-constexpr uint32_t OVERLAY_LINE_SPACING = 2;
-constexpr uint32_t OVERLAY_MARGIN = 8;
+constexpr Uint32 OVERLAY_CHAR_WIDTH = 5;
+constexpr Uint32 OVERLAY_CHAR_HEIGHT = 7;
+constexpr Uint32 OVERLAY_CHAR_SPACING = 1;
+constexpr Uint32 OVERLAY_LINE_SPACING = 2;
+constexpr Uint32 OVERLAY_MARGIN = 8;
 constexpr float OVERLAY_TEXT_SCALE = 2.0f;
 constexpr size_t OVERLAY_MAX_DEBUG_MESSAGES = 8;
-constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 32;
-constexpr uint64_t OVERLAY_MIN_VERTEX_CAPACITY = 4096;
+constexpr Uint64 OVERLAY_MIN_VERTEX_CAPACITY = 4096;
 constexpr size_t OVERLAY_VERTEX_RESERVE_SIZE = 8192;
 constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
 constexpr int FPS_DISPLAY_PRECISION = 1;
+constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 32;
 constexpr float OVERLAY_CONSOLE_HEIGHT_RATIO = 0.4f;
 constexpr size_t OVERLAY_MAX_CONSOLE_INPUT_LENGTH = 96;
 constexpr int CONSOLE_RESULT_PRECISION = 10;
@@ -250,13 +246,13 @@ struct OverlayState {
     WGPUShaderModule shader = nullptr;
     WGPURenderPipeline pipeline = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
-    uint64_t vertexCapacity = 0;
+    Uint64 vertexCapacity = 0;
     std::deque<std::string> debugMessages;
     std::deque<std::string> consoleLines;
     std::string consoleInput;
     bool consoleOpen = false;
     Uint64 fpsCounterStart = 0;
-    uint32_t fpsFrameCount = 0;
+    Uint32 fpsFrameCount = 0;
     float currentFps = 0.0f;
 };
 
@@ -753,6 +749,14 @@ bool ConfigureSurface(AppState &app)
         return false;
     }
 
+    auto selectedMode = WGPUPresentMode_Fifo;
+    for (size_t i = 0; i < caps.presentModeCount; ++i) {
+        if (caps.presentModes[i] == WGPUPresentMode_Mailbox) {
+            selectedMode = WGPUPresentMode_Mailbox;
+            break;
+        }
+    }
+
     app.gpu.surfaceConfig = WGPUSurfaceConfiguration{
         .device = app.gpu.device,
         .format = ChooseSurfaceFormat(caps),
@@ -760,7 +764,7 @@ bool ConfigureSurface(AppState &app)
         .width = app.gpu.width,
         .height = app.gpu.height,
         .alphaMode = caps.alphaModeCount > 0 ? caps.alphaModes[0] : WGPUCompositeAlphaMode_Auto,
-        .presentMode = caps.presentModeCount > 0 ? caps.presentModes[0] : WGPUPresentMode_Fifo,
+        .presentMode = selectedMode,
     };
     wgpuSurfaceConfigure(app.gpu.surface, &app.gpu.surfaceConfig);
     wgpuSurfaceCapabilitiesFreeMembers(caps);
@@ -1123,44 +1127,9 @@ bool EnsureOverlayVertexBuffer(AppState &app, const uint64_t requiredVertices)
     return overlayState.vertexBuffer != nullptr;
 }
 
-bool CreateOverlayResources(AppState &app)
+bool CreateOverlayResources(AppState &app, WGPUShaderModule overlayShader)
 {
-    static constexpr char kOverlayShader[] = R"(
-struct VertexInput {
-    @location(0) position : vec2f,
-    @location(1) color : vec4f,
-}
-
-struct VertexOutput {
-    @builtin(position) position : vec4f,
-    @location(0) color : vec4f,
-}
-
-@vertex
-fn vs_main(input : VertexInput) -> VertexOutput {
-    var out : VertexOutput;
-    out.position = vec4f(input.position, 0.0, 1.0);
-    out.color = input.color;
-    return out;
-}
-
-@fragment
-fn fs_main(input : VertexOutput) -> @location(0) vec4f {
-    return input.color;
-}
-)";
-
-    const WGPUShaderSourceWGSL wgslSource{
-        .chain = WGPUChainedStruct{
-            .next = nullptr,
-            .sType = WGPUSType_ShaderSourceWGSL,
-        },
-        .code = ToWgpuString(kOverlayShader),
-    };
-    const WGPUShaderModuleDescriptor shaderDesc{
-        .nextInChain = &wgslSource.chain,
-    };
-    overlayState.shader = wgpuDeviceCreateShaderModule(app.gpu.device, &shaderDesc);
+    overlayState.shader = overlayShader;
     if (!overlayState.shader) {
         return false;
     }
@@ -1201,8 +1170,8 @@ fn fs_main(input : VertexOutput) -> @location(0) vec4f {
         },
     });
     const auto vertexBufferLayout = WGPUVertexBufferLayout{
-        .arrayStride = sizeof(OverlayVertex),
         .stepMode = WGPUVertexStepMode_Vertex,
+        .arrayStride = sizeof(OverlayVertex),
         .attributeCount = static_cast<uint32_t>(attributes.size()),
         .attributes = attributes.data(),
     };
@@ -1575,8 +1544,24 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderSetBindGroup(pass, 3, app.gpu.shadowBindGroup, 0, nullptr);
 
     RenderObjects(pass);
-    RenderOverlay(app, pass);
 
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+
+    WGPURenderPassColorAttachment colorAttachment2 {
+        .view = view,
+        .depthSlice = WGPU_DEPTH_SLICE_UNDEFINED,
+        .loadOp = WGPULoadOp_Load,
+        .storeOp = WGPUStoreOp_Store,
+    };
+
+    WGPURenderPassDescriptor passDesc2 {
+        .colorAttachmentCount = 1,
+        .colorAttachments = &colorAttachment2,
+    };
+
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
+    RenderOverlay(app, pass);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
@@ -1811,6 +1796,30 @@ void PumpEvents(AppState &app)
     }
 }
 
+void FramerateLimiter(const double targetHz = 120.0f)
+{
+    const double targetFrameSec = 1.0 / targetHz;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+
+    static Uint64 nextFrame = SDL_GetPerformanceCounter();
+    nextFrame += static_cast<Uint64>(targetFrameSec * freq);
+
+    while (true) {
+        const Uint64 now = SDL_GetPerformanceCounter();
+        if (now >= nextFrame) break;
+
+        if (const double remainingSec = static_cast<double>(nextFrame - now) / static_cast<double>(freq); remainingSec > 0.002)
+        {
+            SDL_Delay(static_cast<Uint32>((remainingSec - 0.001) * 1000.0));
+        }
+        else
+        {
+            // spin/yield
+            SDL_Delay(0);
+        }
+    }
+}
+
 void UpdateFrameTiming(AppState &app)
 {
     const Uint64 now = SDL_GetPerformanceCounter();
@@ -1986,7 +1995,8 @@ int main()
 
     shaders["forwardShader"] = createShaderModule(app.gpu.device, "assets/shaders/forward_renderer.wgsl");
     shaders["shadowCaster"] = createShaderModule(app.gpu.device, "assets/shaders/shadow_caster.wgsl");
-    if (!CreateOverlayResources(app)) {
+    shaders["overlayShader"] = createShaderModule(app.gpu.device, "assets/shaders/overlay_shader.wgsl");
+    if (!CreateOverlayResources(app, shaders["overlayShader"])) {
         PushDebugMessage("Failed to create debug text overlay resources", true);
         ReleaseOverlayResources();
         ReleaseGpu(app.gpu);
@@ -2463,7 +2473,7 @@ int main()
             PushDebugMessage("DrawFrame failed", true);
             break;
         }
-        SDL_Delay(16);
+        FramerateLimiter();
     }
 
     for (const auto& [key, value] : meshes) {
