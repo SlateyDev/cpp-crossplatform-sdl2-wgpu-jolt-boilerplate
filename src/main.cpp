@@ -318,7 +318,7 @@ void ExecuteConsoleCommand(const std::string &commandLine)
     std::istringstream stream(trimmed);
     std::string command;
     stream >> command;
-    std::transform(command.begin(), command.end(), command.begin(), [](const unsigned char ch) {
+    std::ranges::transform(command, command.begin(), [](const unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
 
@@ -1736,7 +1736,6 @@ void PumpEvents(AppState &app)
             PushDebugMessage("Mouse-look disabled due to focus loss");
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
             SetConsoleOpen(app, !overlayState.consoleOpen);
-            continue;
         } else if (overlayState.consoleOpen && ev.type == SDL_TEXTINPUT) {
             for (size_t i = 0; ev.text.text[i] != '\0'; ++i) {
                 const unsigned char ch = static_cast<unsigned char>(ev.text.text[i]);
@@ -1748,7 +1747,6 @@ void PumpEvents(AppState &app)
                 }
                 overlayState.consoleInput.push_back(static_cast<char>(ch));
             }
-            continue;
         } else if (overlayState.consoleOpen && ev.type == SDL_KEYDOWN) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_BACKSPACE && !overlayState.consoleInput.empty()) {
                 overlayState.consoleInput.pop_back();
@@ -1758,9 +1756,8 @@ void PumpEvents(AppState &app)
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
                 SetConsoleOpen(app, false);
             }
-            continue;
         } else if (overlayState.consoleOpen) {
-            continue;
+            // STOP PROCESSING FURTHER EVENTS BECAUSE CONSOLE IS OPEN
         } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT && !app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = true;
@@ -1965,6 +1962,7 @@ int main()
         PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
         return 1;
     }
+    SDL_StopTextInput();
     PushDebugMessage("SDL initialized");
 
     AppState app;
