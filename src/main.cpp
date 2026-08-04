@@ -640,6 +640,14 @@ bool ConfigureSurface(AppState &app)
         return false;
     }
 
+    auto selectedMode = WGPUPresentMode_Fifo;
+    for (size_t i = 0; i < caps.presentModeCount; ++i) {
+        if (caps.presentModes[i] == WGPUPresentMode_Mailbox) {
+            selectedMode = WGPUPresentMode_Mailbox;
+            break;
+        }
+    }
+
     app.gpu.surfaceConfig = WGPUSurfaceConfiguration{
         .device = app.gpu.device,
         .format = ChooseSurfaceFormat(caps),
@@ -647,7 +655,7 @@ bool ConfigureSurface(AppState &app)
         .width = app.gpu.width,
         .height = app.gpu.height,
         .alphaMode = caps.alphaModeCount > 0 ? caps.alphaModes[0] : WGPUCompositeAlphaMode_Auto,
-        .presentMode = caps.presentModeCount > 0 ? caps.presentModes[0] : WGPUPresentMode_Fifo,
+        .presentMode = selectedMode,
     };
     wgpuSurfaceConfigure(app.gpu.surface, &app.gpu.surfaceConfig);
     wgpuSurfaceCapabilitiesFreeMembers(caps);
@@ -1570,6 +1578,30 @@ void PumpEvents(AppState &app)
     }
 }
 
+void FramerateLimiter(const double targetHz = 120.0f)
+{
+    const double targetFrameSec = 1.0 / targetHz;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+
+    static Uint64 nextFrame = SDL_GetPerformanceCounter();
+    nextFrame += static_cast<Uint64>(targetFrameSec * freq);
+
+    while (true) {
+        const Uint64 now = SDL_GetPerformanceCounter();
+        if (now >= nextFrame) break;
+
+        if (const double remainingSec = static_cast<double>(nextFrame - now) / static_cast<double>(freq); remainingSec > 0.002)
+        {
+            SDL_Delay(static_cast<Uint32>((remainingSec - 0.001) * 1000.0));
+        }
+        else
+        {
+            // spin/yield
+            SDL_Delay(0);
+        }
+    }
+}
+
 void UpdateFrameTiming(AppState &app)
 {
     const Uint64 now = SDL_GetPerformanceCounter();
@@ -2217,7 +2249,7 @@ int main()
             PushDebugMessage("DrawFrame failed", true);
             break;
         }
-        SDL_Delay(16);
+        FramerateLimiter();
     }
 
     for (const auto& [key, value] : meshes) {

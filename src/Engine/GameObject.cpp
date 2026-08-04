@@ -102,9 +102,9 @@ T* GameObject::AddComponent(){
     component->setParent(this);
     components.push_back(component);
 
-    if (scene != nullptr && scene->getIsActive() && getIsActive() && component.getIsActive() && !component.awakeCalled) {
-        component.Awake();
-        component.awakeCalled = true;
+    if (scene != nullptr && scene->getIsActive() && getIsActive() && component->getIsActive() && !component->awakeCalled) {
+        component->Awake();
+        component->awakeCalled = true;
     }
     return component;
 }
