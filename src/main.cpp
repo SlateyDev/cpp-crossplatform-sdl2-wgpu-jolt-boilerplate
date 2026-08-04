@@ -45,6 +45,7 @@
 #include "Engine/GameObject.hpp"
 #include "Engine/AssetManager.hpp"
 #include "Engine/EngineTexture.hpp"
+#include "Engine/Frustum.hpp"
 
 namespace {
 
@@ -149,6 +150,9 @@ auto directionalLight = LightUniform{
 
 struct Mesh {
     std::vector<Primitive> primitives;
+    glm::vec3 localBoundsCenter{0.0f, 0.0f, 0.0f};
+    float localBoundsRadius = 0.0f;
+    bool hasBounds = false;
 };
 
 std::unordered_map<std::string, WGPUShaderModule> shaders;
@@ -952,8 +956,88 @@ void UpdateCascadeData(const AppState &app) {
     }
 }
 
-void RenderObjects(WGPURenderPassEncoder pass) {
-    for (const auto& obj : objects) {
+Mesh BuildMesh(std::vector<Primitive> primitives) {
+    Mesh mesh{
+        .primitives = std::move(primitives),
+    };
+
+    if (mesh.primitives.empty()) {
+        return mesh;
+    }
+
+    auto minBounds = glm::vec3(std::numeric_limits<float>::max());
+    auto maxBounds = glm::vec3(std::numeric_limits<float>::lowest());
+    bool hasPrimitiveBounds = false;
+
+    for (const auto& primitive : mesh.primitives) {
+        if (primitive.vertexCount == 0) {
+            continue;
+        }
+        const auto primitiveMin = primitive.localBoundsCenter - glm::vec3(primitive.localBoundsRadius);
+        const auto primitiveMax = primitive.localBoundsCenter + glm::vec3(primitive.localBoundsRadius);
+        minBounds = glm::min(minBounds, primitiveMin);
+        maxBounds = glm::max(maxBounds, primitiveMax);
+        hasPrimitiveBounds = true;
+    }
+
+    if (!hasPrimitiveBounds) {
+        return mesh;
+    }
+
+    mesh.localBoundsCenter = (minBounds + maxBounds) * 0.5f;
+
+    float maxRadius = 0.0f;
+    for (const auto& primitive : mesh.primitives) {
+        if (primitive.vertexCount == 0) {
+            continue;
+        }
+        const auto delta = primitive.localBoundsCenter - mesh.localBoundsCenter;
+        const auto primitiveRadius = glm::length(delta) + primitive.localBoundsRadius;
+        maxRadius = std::max(maxRadius, primitiveRadius);
+    }
+    mesh.localBoundsRadius = maxRadius;
+    mesh.hasBounds = true;
+
+    return mesh;
+}
+
+bool IsObjectVisible(const MeshInstance& object, Frustum& frustum) {
+    const auto meshIt = meshes.find(object.meshName);
+    if (meshIt == meshes.end()) {
+        return false;
+    }
+
+    const auto& mesh = meshIt->second;
+    if (!mesh.hasBounds) {
+        return true;
+    }
+
+    const auto worldCenter = object.translation
+        + (object.rotation * (mesh.localBoundsCenter * object.scale));
+    const auto maxScale = std::max(std::max(std::abs(object.scale.x), std::abs(object.scale.y)), std::abs(object.scale.z));
+    const auto worldRadius = mesh.localBoundsRadius * maxScale;
+
+    return frustum.SphereIn(worldCenter, worldRadius);
+}
+
+std::vector<MeshInstance*> CollectVisibleObjects(Frustum& frustum) {
+    std::vector<MeshInstance*> visibleObjects;
+    visibleObjects.reserve(objects.size());
+
+    for (const auto& meshInstance : objects) {
+        if (!meshInstance) {
+            continue;
+        }
+        if (IsObjectVisible(*meshInstance, frustum)) {
+            visibleObjects.push_back(meshInstance);
+        }
+    }
+
+    return visibleObjects;
+}
+
+void RenderObjects(WGPURenderPassEncoder pass, const std::vector<MeshInstance*>& objectsToRender) {
+    for (const auto& obj : objectsToRender) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
         auto it = meshes.find(obj->meshName);
@@ -980,8 +1064,8 @@ void RenderObjects(WGPURenderPassEncoder pass) {
     }
 }
 
-void RenderShadowObjects(WGPURenderPassEncoder pass) {
-    for (const auto& obj : objects) {
+void RenderShadowObjects(WGPURenderPassEncoder pass, const std::vector<MeshInstance*>& objectsToRender) {
+    for (const auto& obj : objectsToRender) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
         auto it = meshes.find(obj->meshName);
@@ -1434,6 +1518,9 @@ bool DrawFrame(AppState &app)
     );
 
     const auto transform = OPEN_GL_TO_WGPU_MATRIX * app.gpu.projectionMatrix * app.gpu.viewMatrix;
+    Frustum cameraFrustum;
+    cameraFrustum.Extract(app.gpu.projectionMatrix, app.gpu.viewMatrix);
+    const auto visibleObjects = CollectVisibleObjects(cameraFrustum);
     const auto cameraData = CameraUniform{
         .viewProjectionMatrix = transform,
         .position = glm::vec4(flyCamera.position, 1.0f),
@@ -1488,7 +1575,7 @@ bool DrawFrame(AppState &app)
 
         wgpuRenderPassEncoderSetPipeline(shadowRenderPassEncoder, pipelines["shadowCaster"]);
         wgpuRenderPassEncoderSetBindGroup(shadowRenderPassEncoder, 0, app.gpu.sceneBindGroup, 0, nullptr);
-        RenderShadowObjects(shadowRenderPassEncoder);
+        RenderShadowObjects(shadowRenderPassEncoder, visibleObjects);
 
         wgpuRenderPassEncoderEnd(shadowRenderPassEncoder);
         wgpuRenderPassEncoderRelease(shadowRenderPassEncoder);
@@ -1542,8 +1629,7 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderSetPipeline(pass, pipelines["forwardRenderer"]);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.sceneBindGroup, 0, nullptr);
     wgpuRenderPassEncoderSetBindGroup(pass, 3, app.gpu.shadowBindGroup, 0, nullptr);
-
-    RenderObjects(pass);
+    RenderObjects(pass, visibleObjects);
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
@@ -2009,19 +2095,19 @@ int main()
     std::vector<Primitive> cube_primitives = std::vector<Primitive>{
         Primitive::CreateFromPremadeData(app.gpu.device, boxVertices, boxIndices, "sample.png"),
     };
-    meshes["cube"] = Mesh { .primitives = cube_primitives };
+    meshes["cube"] = BuildMesh(std::move(cube_primitives));
 
     std::vector<Primitive> plane_primitives = std::vector<Primitive>{
         Primitive::CreateFromPremadeData(app.gpu.device, planeVertices, planeIndices, "sample.png"),
     };
-    meshes["plane"] = Mesh { .primitives = plane_primitives };
+    meshes["plane"] = BuildMesh(std::move(plane_primitives));
 
     const std::string modelPath = "assets/BoomBox.gltf";
     if (std::filesystem::exists(modelPath)) {
         std::vector<Primitive> boomBoxPrimitives;
         std::string loadError;
         if (LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
-            meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
+            meshes["duck"] = BuildMesh(std::move(boomBoxPrimitives));
             objects.push_back(&gameObject2);
             PushDebugMessage("Loaded glTF model: " + modelPath);
         } else {

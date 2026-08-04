@@ -20,6 +20,8 @@ class Primitive {
         uint32_t vertexCount = 0;
         WGPUBuffer indexBuffer = nullptr;
         uint32_t indexCount = 0;
+        glm::vec3 localBoundsCenter{0.0f, 0.0f, 0.0f};
+        float localBoundsRadius = 0.0f;
 
         static Primitive CreateFromPremadeData(WGPUDevice device, const std::vector<Vertex> &vertices, const std::vector<int> &indices, std::string materialKey);
 };

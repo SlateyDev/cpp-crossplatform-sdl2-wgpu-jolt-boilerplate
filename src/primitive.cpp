@@ -1,5 +1,9 @@
 #include "primitive.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 const std::vector<Vertex> boxVertices = {
     // Top face
     {glm::vec3(-0.5f, -0.5f,  0.5f), glm::vec2(0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)},
@@ -65,6 +69,24 @@ Primitive Primitive::CreateFromPremadeData(WGPUDevice device, const std::vector<
         .vertexCount = static_cast<uint32_t>(vertices.size()),
         .indexCount = static_cast<uint32_t>(indices.size()),
     };
+
+    if (!vertices.empty()) {
+        auto minBounds = glm::vec3(std::numeric_limits<float>::max());
+        auto maxBounds = glm::vec3(std::numeric_limits<float>::lowest());
+
+        for (const auto& vertex : vertices) {
+            minBounds = glm::min(minBounds, vertex.position);
+            maxBounds = glm::max(maxBounds, vertex.position);
+        }
+
+        newPrimitive.localBoundsCenter = (minBounds + maxBounds) * 0.5f;
+        float maxDistanceSq = 0.0f;
+        for (const auto& vertex : vertices) {
+            const auto delta = vertex.position - newPrimitive.localBoundsCenter;
+            maxDistanceSq = std::max(maxDistanceSq, glm::dot(delta, delta));
+        }
+        newPrimitive.localBoundsRadius = std::sqrt(maxDistanceSq);
+    }
 
     WGPUBufferDescriptor vertexBufferDescriptor = {
         .nextInChain = nullptr,
