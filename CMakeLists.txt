@@ -140,6 +140,7 @@ if(EMSCRIPTEN)
         "-sSDL2_IMAGE_FORMATS=['png']"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASYNCIFY"
+        "-sSTACK_SIZE=1048576"
         "--preload-file"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets"
     )

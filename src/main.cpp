@@ -2,6 +2,15 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #if defined(__EMSCRIPTEN__)
@@ -90,8 +99,159 @@ public:
             std::max(1u, std::thread::hardware_concurrency() - 1)
         );
 
+        broadPhaseLayerInterface = std::make_unique<BroadPhaseLayerInterfaceImpl>();
+        objectVsBroadPhaseLayerFilter = std::make_unique<ObjectVsBroadPhaseLayerFilterImpl>();
+        objectLayerPairFilter = std::make_unique<ObjectLayerPairFilterImpl>();
+        physicsSystem = std::make_unique<JPH::PhysicsSystem>();
+        physicsSystem->Init(
+            cMaxBodies,
+            cNumBodyMutexes,
+            cMaxBodyPairs,
+            cMaxContactConstraints,
+            *broadPhaseLayerInterface,
+            *objectVsBroadPhaseLayerFilter,
+            *objectLayerPairFilter
+        );
+        physicsSystem->SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
+
         initialized = true;
         return true;
+    }
+
+    bool CreateScene(const glm::vec3 &planePosition, const glm::vec3 &boxPosition, const glm::vec3 &characterPosition)
+    {
+        if (!initialized || !physicsSystem) {
+            return false;
+        }
+
+        auto &bodyInterface = physicsSystem->GetBodyInterface();
+
+        const JPH::RefConst<JPH::Shape> planeShape = new JPH::BoxShape(JPH::Vec3(20.0f, 0.5f, 20.0f));
+        const JPH::BodyCreationSettings planeSettings(
+            planeShape,
+            ToRVec3(glm::vec3(planePosition.x, planePosition.y - 0.5f, planePosition.z)),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        planeBodyId = bodyInterface.CreateAndAddBody(planeSettings, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> boxShape = new JPH::BoxShape(JPH::Vec3(0.5f, 0.5f, 0.5f));
+        const JPH::BodyCreationSettings boxSettings(
+            boxShape,
+            ToRVec3(boxPosition),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        boxBodyId = bodyInterface.CreateAndAddBody(boxSettings, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> characterShape = new JPH::CapsuleShape(0.6f, 0.3f);
+        JPH::BodyCreationSettings characterSettings(
+            characterShape,
+            ToRVec3(characterPosition),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Dynamic,
+            Layers::MOVING
+        );
+        characterSettings.mFriction = 0.7f;
+        characterSettings.mLinearDamping = 0.12f;
+        characterSettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+        characterBodyId = bodyInterface.CreateAndAddBody(characterSettings, JPH::EActivation::Activate);
+        sceneCreated = !planeBodyId.IsInvalid() && !boxBodyId.IsInvalid() && !characterBodyId.IsInvalid();
+        return sceneCreated;
+    }
+
+    void ApplyCharacterInput(const Uint8 *keyboardState)
+    {
+        if (!sceneCreated || !physicsSystem || characterBodyId.IsInvalid()) {
+            return;
+        }
+
+        glm::vec2 moveInput(0.0f);
+        if (keyboardState[SDL_SCANCODE_LEFT]) {
+            moveInput.x -= 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_RIGHT]) {
+            moveInput.x += 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_UP]) {
+            moveInput.y -= 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_DOWN]) {
+            moveInput.y += 1.0f;
+        }
+        if (glm::length(moveInput) > 1.0f) {
+            moveInput = glm::normalize(moveInput);
+        }
+
+        constexpr auto moveSpeed = 4.0f;
+        auto &bodyInterface = physicsSystem->GetBodyInterface();
+        const auto currentVelocity = bodyInterface.GetLinearVelocity(characterBodyId);
+        const JPH::Vec3 targetVelocity(moveInput.x * moveSpeed, currentVelocity.GetY(), moveInput.y * moveSpeed);
+        bodyInterface.SetLinearVelocity(characterBodyId, targetVelocity);
+
+        const auto jumpHeldNow = keyboardState[SDL_SCANCODE_SPACE] != 0;
+        if (jumpHeldNow && !jumpHeld && IsCharacterGrounded()) {
+            bodyInterface.AddImpulse(characterBodyId, JPH::Vec3(0.0f, 4500.0f, 0.0f));
+        }
+        jumpHeld = jumpHeldNow;
+    }
+
+    void StepSimulation(const float deltaSeconds) const
+    {
+        if (!sceneCreated || !physicsSystem || !tempAllocator || !jobSystem) {
+            return;
+        }
+        constexpr int collisionSteps = 1;
+        physicsSystem->Update(deltaSeconds, collisionSteps, tempAllocator.get(), jobSystem.get());
+    }
+
+    void SyncScene(MeshInstance &boxObject, MeshInstance &characterObject) const
+    {
+        if (!sceneCreated || !physicsSystem) {
+            return;
+        }
+
+        const auto &bodyInterface = physicsSystem->GetBodyInterface();
+        if (!boxBodyId.IsInvalid()) {
+            const JPH::RVec3 position = bodyInterface.GetCenterOfMassPosition(boxBodyId);
+            boxObject.translation = glm::vec3(static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ()));
+        }
+
+        if (!characterBodyId.IsInvalid()) {
+            const JPH::RVec3 position = bodyInterface.GetCenterOfMassPosition(characterBodyId);
+            characterObject.translation = glm::vec3(static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ()));
+            characterObject.rotation = glm::identity<glm::quat>();
+        }
+    }
+
+    std::string GetHoveredObjectName(const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, const float maxDistance) const
+    {
+        if (!sceneCreated || !physicsSystem) {
+            return {};
+        }
+
+        const JPH::RRayCast ray(ToRVec3(rayOrigin), ToVec3(rayDirection * maxDistance));
+        JPH::RayCastResult hitResult;
+        if (!physicsSystem->GetNarrowPhaseQuery().CastRay(ray, hitResult)) {
+            return {};
+        }
+        if (hitResult.mBodyID == characterBodyId) {
+            return "Character";
+        }
+        if (hitResult.mBodyID == planeBodyId) {
+            return "Plane";
+        }
+        if (hitResult.mBodyID == boxBodyId) {
+            return "Box";
+        }
+        return {};
+    }
+
+    bool IsCharacterGroundedPublic() const
+    {
+        return IsCharacterGrounded();
     }
 
     ~JoltRuntime()
@@ -99,6 +259,18 @@ public:
         if (!initialized) {
             return;
         }
+
+        if (physicsSystem) {
+            auto &bodyInterface = physicsSystem->GetBodyInterface();
+            DestroyBodyIfValid(bodyInterface, characterBodyId);
+            DestroyBodyIfValid(bodyInterface, boxBodyId);
+            DestroyBodyIfValid(bodyInterface, planeBodyId);
+        }
+
+        physicsSystem.reset();
+        objectLayerPairFilter.reset();
+        objectVsBroadPhaseLayerFilter.reset();
+        broadPhaseLayerInterface.reset();
 
         jobSystem.reset();
         tempAllocator.reset();
@@ -109,9 +281,131 @@ public:
     }
 
 private:
+    static constexpr JPH::uint cMaxBodies = 1024;
+    static constexpr JPH::uint cNumBodyMutexes = 0;
+    static constexpr JPH::uint cMaxBodyPairs = 1024;
+    static constexpr JPH::uint cMaxContactConstraints = 1024;
+
+    struct Layers {
+        static constexpr JPH::ObjectLayer NON_MOVING = 0;
+        static constexpr JPH::ObjectLayer MOVING = 1;
+        static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+    };
+
+    struct BroadPhaseLayers {
+        static constexpr JPH::BroadPhaseLayer NON_MOVING{0};
+        static constexpr JPH::BroadPhaseLayer MOVING{1};
+        static constexpr JPH::uint NUM_LAYERS = 2;
+    };
+
+    class BroadPhaseLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface {
+    public:
+        BroadPhaseLayerInterfaceImpl()
+        {
+            objectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
+            objectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
+        }
+
+        [[nodiscard]] JPH::uint GetNumBroadPhaseLayers() const override
+        {
+            return BroadPhaseLayers::NUM_LAYERS;
+        }
+
+        [[nodiscard]] JPH::BroadPhaseLayer GetBroadPhaseLayer(const JPH::ObjectLayer layer) const override
+        {
+            return objectToBroadPhase[layer];
+        }
+
+        [[nodiscard]] const char *GetBroadPhaseLayerName(const JPH::BroadPhaseLayer layer) const
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+            override
+#endif
+        {
+            if (layer == BroadPhaseLayers::NON_MOVING) {
+                return "NON_MOVING";
+            }
+            if (layer == BroadPhaseLayers::MOVING) {
+                return "MOVING";
+            }
+            return "UNKNOWN";
+        }
+
+    private:
+        JPH::BroadPhaseLayer objectToBroadPhase[Layers::NUM_LAYERS];
+    };
+
+    class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
+    public:
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer layer1, const JPH::ObjectLayer layer2) const override
+        {
+            if (layer1 == Layers::NON_MOVING && layer2 == Layers::NON_MOVING) {
+                return false;
+            }
+            return true;
+        }
+    };
+
+    class ObjectVsBroadPhaseLayerFilterImpl final : public JPH::ObjectVsBroadPhaseLayerFilter {
+    public:
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer layer1, const JPH::BroadPhaseLayer layer2) const override
+        {
+            if (layer1 == Layers::NON_MOVING) {
+                return layer2 == BroadPhaseLayers::MOVING;
+            }
+            if (layer1 == Layers::MOVING) {
+                return true;
+            }
+            return false;
+        }
+    };
+
+    static JPH::RVec3 ToRVec3(const glm::vec3 &value)
+    {
+        return JPH::RVec3(value.x, value.y, value.z);
+    }
+
+    static JPH::Vec3 ToVec3(const glm::vec3 &value)
+    {
+        return JPH::Vec3(value.x, value.y, value.z);
+    }
+
+    bool IsCharacterGrounded() const
+    {
+        if (!sceneCreated || !physicsSystem || characterBodyId.IsInvalid()) {
+            return false;
+        }
+        const auto &bodyInterface = physicsSystem->GetBodyInterface();
+        const auto characterPosition = bodyInterface.GetCenterOfMassPosition(characterBodyId);
+        const JPH::RRayCast downRay(characterPosition, JPH::Vec3(0.0f, -1.0f, 0.0f));
+        const JPH::IgnoreSingleBodyFilter ignoreCharacterFilter(characterBodyId);
+        if (JPH::RayCastResult hitResult; !physicsSystem->GetNarrowPhaseQuery().CastRay(downRay, hitResult, {}, {}, ignoreCharacterFilter)) {
+            return false;
+        }
+        return true;
+    }
+
+    static void DestroyBodyIfValid(JPH::BodyInterface &bodyInterface, JPH::BodyID &bodyId)
+    {
+        if (bodyId.IsInvalid()) {
+            return;
+        }
+        bodyInterface.RemoveBody(bodyId);
+        bodyInterface.DestroyBody(bodyId);
+        bodyId = JPH::BodyID();
+    }
+
     bool initialized = false;
+    bool sceneCreated = false;
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
+    std::unique_ptr<BroadPhaseLayerInterfaceImpl> broadPhaseLayerInterface;
+    std::unique_ptr<ObjectVsBroadPhaseLayerFilterImpl> objectVsBroadPhaseLayerFilter;
+    std::unique_ptr<ObjectLayerPairFilterImpl> objectLayerPairFilter;
+    std::unique_ptr<JPH::PhysicsSystem> physicsSystem;
+    JPH::BodyID planeBodyId;
+    JPH::BodyID boxBodyId;
+    JPH::BodyID characterBodyId;
+    bool jumpHeld = false;
 };
 
 struct alignas(16) ModelMatrixUniform {
@@ -164,6 +458,7 @@ std::vector<MeshInstance*> objects;
 MeshInstance gameObject1;
 MeshInstance gameObject2;
 MeshInstance gameObject3;
+MeshInstance capsuleCharacterObject;
 
 AudioManager audioManager;
 constexpr const char* DEFAULT_SFX_NAME = "default_sfx";
@@ -264,6 +559,8 @@ struct OverlayState {
 };
 
 OverlayState overlayState;
+std::string hoverDebugText = "Hover: None";
+std::string characterDebugText = "Character: Airborne";
 
 void PushDebugMessage(const std::string &message, const bool logAsError = false)
 {
@@ -1269,6 +1566,28 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         app.gpu.height
     );
 
+    const float statusYStart = fpsY + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
+    AppendOverlayText(
+        vertices,
+        hoverDebugText,
+        static_cast<float>(OVERLAY_MARGIN),
+        statusYStart,
+        OVERLAY_TEXT_SCALE,
+        glm::vec4(0.85f, 0.95f, 0.85f, 1.0f),
+        app.gpu.width,
+        app.gpu.height
+    );
+    AppendOverlayText(
+        vertices,
+        characterDebugText,
+        static_cast<float>(OVERLAY_MARGIN),
+        statusYStart + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING),
+        OVERLAY_TEXT_SCALE,
+        glm::vec4(0.95f, 0.85f, 0.85f, 1.0f),
+        app.gpu.width,
+        app.gpu.height
+    );
+
     const float lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
     const float usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
     const float maxCharsPerLine = std::max(
@@ -1429,7 +1748,7 @@ bool DrawFrame(AppState &app)
         return false;
     }
 
-    gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
+    // gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
     gameObject2.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
     // gameObject3.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
 
@@ -1900,6 +2219,56 @@ void UpdateCameraFromInput(AppState &app)
     app.mouseDeltaY = 0.0f;
 }
 
+bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
+{
+    if (app.gpu.width == 0 || app.gpu.height == 0) {
+        return false;
+    }
+
+    int mouseX = 0;
+    int mouseY = 0;
+    SDL_GetMouseState(&mouseX, &mouseY);
+
+    const glm::vec4 viewport(0.0f, 0.0f, static_cast<float>(app.gpu.width), static_cast<float>(app.gpu.height));
+    const float clampedX = static_cast<float>(std::clamp(mouseX, 0, static_cast<int>(app.gpu.width)));
+    const float clampedY = static_cast<float>(std::clamp(mouseY, 0, static_cast<int>(app.gpu.height)));
+    const glm::vec3 screenNear(clampedX, static_cast<float>(app.gpu.height) - clampedY, 0.0f);
+    const glm::vec3 screenFar(clampedX, static_cast<float>(app.gpu.height) - clampedY, 1.0f);
+
+    const glm::vec3 worldNear = glm::unProject(screenNear, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const glm::vec3 worldFar = glm::unProject(screenFar, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const glm::vec3 rayDirection = worldFar - worldNear;
+    if (glm::length(rayDirection) <= 0.0001f) {
+        return false;
+    }
+
+    origin = worldNear;
+    direction = glm::normalize(rayDirection);
+    return true;
+}
+
+void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
+{
+    const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
+    jolt.ApplyCharacterInput(keyboardState);
+    jolt.StepSimulation(app.frameDeltaSeconds);
+    jolt.SyncScene(gameObject1, capsuleCharacterObject);
+
+    characterDebugText = jolt.IsCharacterGroundedPublic() ? "Character: Grounded" : "Character: Airborne";
+
+    glm::vec3 rayOrigin(0.0f);
+    glm::vec3 rayDirection(0.0f);
+    if (!BuildMouseRay(app, rayOrigin, rayDirection)) {
+        hoverDebugText = "Hover: None";
+        return;
+    }
+
+    const std::string hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
+    hoverDebugText = hoveredObject.empty() ? "Hover: None" : "Hover: " + hoveredObject;
+}
+
+JoltRuntime *activeJoltRuntime = nullptr;
+
 #if defined(__EMSCRIPTEN__)
 void WasmMainLoop(void *userdata)
 {
@@ -1911,6 +2280,9 @@ void WasmMainLoop(void *userdata)
         return;
     }
     UpdateCameraFromInput(*app);
+    if (activeJoltRuntime != nullptr) {
+        UpdatePhysicsScene(*app, *activeJoltRuntime);
+    }
     DrawFrame(*app);
 }
 #endif
@@ -1964,9 +2336,15 @@ int main()
     gameObject3.rotation = glm::quat(glm::vec3(-0.5f * glm::pi<float>(), 0.0f, 0.0f));
     gameObject3.scale = glm::vec3(40.0f, 40.0f, 40.0f);
 
+    capsuleCharacterObject.meshName = "cube";
+    capsuleCharacterObject.translation = glm::vec3(-2.0f, -2.8f, -2.0f);
+    capsuleCharacterObject.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
+    capsuleCharacterObject.scale = glm::vec3(0.6f, 1.8f, 0.6f);
+
     objects.push_back(&gameObject1);
     // objects.push_back(gameObject2);
     objects.push_back(&gameObject3);
+    objects.push_back(&capsuleCharacterObject);
 
     SDL_SetMainReady();
 
@@ -1976,6 +2354,12 @@ int main()
         return 1;
     }
     PushDebugMessage("Jolt initialized");
+    if (!jolt.CreateScene(gameObject3.translation, gameObject1.translation, capsuleCharacterObject.translation)) {
+        PushDebugMessage("Failed to create Jolt collision scene", true);
+        return 1;
+    }
+    PushDebugMessage("Jolt collision scene initialized (plane, box, capsule)");
+    activeJoltRuntime = &jolt;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
@@ -2510,12 +2894,15 @@ int main()
             break;
         }
         UpdateCameraFromInput(app);
+        UpdatePhysicsScene(app, jolt);
         if (!DrawFrame(app)) {
             PushDebugMessage("DrawFrame failed", true);
             break;
         }
         FramerateLimiter();
     }
+
+    activeJoltRuntime = nullptr;
 
     for (const auto& [key, value] : meshes) {
         for (const auto& primitive : value.primitives) {
