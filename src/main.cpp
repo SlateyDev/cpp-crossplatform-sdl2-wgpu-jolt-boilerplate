@@ -31,12 +31,24 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+}
+
+#ifndef WREN_STATIC
+#define WREN_STATIC
+#endif
+extern "C" {
+#include <wren.h>
+}
+
 #include <atomic>
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdarg>
-#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -611,6 +623,156 @@ bool ParseDoubleArgument(const std::string &text, double &outValue)
     return endPtr != startPtr && *endPtr == '\0';
 }
 
+int LuaConsolePrint(lua_State *state)
+{
+    const int argument_count = lua_gettop(state);
+    std::ostringstream output;
+    for (int i = 1; i <= argument_count; ++i) {
+        if (i > 1) {
+            output << '\t';
+        }
+        size_t length = 0;
+        const char *string_value = luaL_tolstring(state, i, &length);
+        if (string_value != nullptr) {
+            output.write(string_value, static_cast<std::streamsize>(length));
+        }
+        lua_pop(state, 1);
+    }
+
+    const std::string message = output.str();
+    if (!message.empty()) {
+        PushConsoleLine("[lua] " + message);
+    }
+    return 0;
+}
+
+void WrenConsoleWrite(WrenVM *, const char *text)
+{
+    if (text == nullptr) {
+        return;
+    }
+
+    std::string message(text);
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    if (!message.empty()) {
+        PushConsoleLine("[wren] " + message);
+    }
+}
+
+void WrenConsoleError(WrenVM *, WrenErrorType type, const char *module, int line, const char *message)
+{
+    std::ostringstream output;
+    output << "[wren] ";
+    if (type == WREN_ERROR_COMPILE) {
+        output << "Compile error";
+        if (module != nullptr) {
+            output << " in " << module;
+        }
+        if (line >= 0) {
+            output << ":" << line;
+        }
+        output << ": ";
+    } else if (type == WREN_ERROR_RUNTIME) {
+        output << "Runtime error: ";
+    } else {
+        output << "Stack trace";
+        if (module != nullptr) {
+            output << " in " << module;
+        }
+        if (line >= 0) {
+            output << ":" << line;
+        }
+        output << ": ";
+    }
+    output << (message ? message : "unknown error");
+    PushConsoleLine(output.str());
+}
+
+struct ScriptingState {
+    lua_State *luaState = nullptr;
+    WrenVM *wrenVm = nullptr;
+};
+
+ScriptingState scriptingState;
+
+bool InitializeScripting()
+{
+    scriptingState.luaState = luaL_newstate();
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] Failed to create VM");
+        return false;
+    }
+    luaL_openlibs(scriptingState.luaState);
+    lua_pushcfunction(scriptingState.luaState, LuaConsolePrint);
+    lua_setglobal(scriptingState.luaState, "print");
+
+    WrenConfiguration config;
+    wrenInitConfiguration(&config);
+    config.writeFn = WrenConsoleWrite;
+    config.errorFn = WrenConsoleError;
+    scriptingState.wrenVm = wrenNewVM(&config);
+    if (scriptingState.wrenVm == nullptr) {
+        PushConsoleLine("[wren] Failed to create VM");
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void ShutdownScripting()
+{
+    if (scriptingState.wrenVm != nullptr) {
+        wrenFreeVM(scriptingState.wrenVm);
+        scriptingState.wrenVm = nullptr;
+    }
+    if (scriptingState.luaState != nullptr) {
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+    }
+}
+
+bool ExecuteLuaScript(const std::string &script)
+{
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] VM is not initialized");
+        return false;
+    }
+
+    lua_settop(scriptingState.luaState, 0);
+    const int loadStatus = luaL_loadstring(scriptingState.luaState, script.c_str());
+    if (loadStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    const int executeStatus = lua_pcall(scriptingState.luaState, 0, LUA_MULTRET, 0);
+    if (executeStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    lua_settop(scriptingState.luaState, 0);
+    return true;
+}
+
+bool ExecuteWrenScript(const std::string &script)
+{
+    if (scriptingState.wrenVm == nullptr) {
+        PushConsoleLine("[wren] VM is not initialized");
+        return false;
+    }
+
+    const WrenInterpretResult result = wrenInterpret(scriptingState.wrenVm, "main", script.c_str());
+    return result == WREN_RESULT_SUCCESS;
+}
+
 void ExecuteConsoleCommand(const std::string &commandLine)
 {
     const std::string trimmed = TrimWhitespace(commandLine);
@@ -660,6 +822,30 @@ void ExecuteConsoleCommand(const std::string &commandLine)
         std::ostringstream resultStream;
         resultStream << std::setprecision(CONSOLE_RESULT_PRECISION) << result;
         PushConsoleLine("Result: " + resultStream.str());
+        return;
+    }
+
+    if (command == "lua") {
+        std::string script;
+        std::getline(stream, script);
+        script = TrimWhitespace(script);
+        if (script.empty()) {
+            PushConsoleLine("Usage: lua <script>");
+        } else {
+            ExecuteLuaScript(script);
+        }
+        return;
+    }
+
+    if (command == "wren") {
+        std::string script;
+        std::getline(stream, script);
+        script = TrimWhitespace(script);
+        if (script.empty()) {
+            PushConsoleLine("Usage: wren <script>");
+        } else {
+            ExecuteWrenScript(script);
+        }
         return;
     }
 
@@ -2245,7 +2431,9 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
 void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
 {
     const auto *keyboardState = SDL_GetKeyboardState(nullptr);
-    jolt.ApplyCharacterInput(keyboardState);
+    if (!overlayState.consoleOpen) {
+        jolt.ApplyCharacterInput(keyboardState);
+    }
     jolt.StepSimulation(app.frameDeltaSeconds);
     jolt.SyncScene(gameObject1, capsuleCharacterObject);
 
@@ -2876,6 +3064,16 @@ int main()
         return wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
     }();
 
+    if (!InitializeScripting()) {
+        PushDebugMessage("Failed to initialize scripting runtimes", true);
+        ReleaseOverlayResources();
+        ReleaseGpu(app.gpu);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 1;
+    }
+    PushDebugMessage("Scripting runtimes initialized");
+
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop_arg(WasmMainLoop, &app, 0, 1);
     return 0;
@@ -2908,6 +3106,7 @@ int main()
         }
     }
 
+    ShutdownScripting();
     ReleaseOverlayResources();
     ReleaseGpu(app.gpu);
     audioManager.Shutdown();
