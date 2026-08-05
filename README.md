@@ -73,6 +73,8 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - **Esc**: Exit mouse-look mode
 - **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
 - **Tilde (`~`)**: Toggle developer console
+- **1**: Play `assets/audio/sfx.wav` (supports overlapping playback on multiple channels)
+- **M**: Toggle looping `assets/audio/music.ogg`
 
 ## Developer console
 

@@ -130,11 +130,13 @@ if(EMSCRIPTEN)
     target_compile_options(aberrant_engine PRIVATE
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
+        "-sUSE_SDL_MIXER=2"
         "-sSDL2_IMAGE_FORMATS=['png']"
     )
     target_link_options(aberrant_engine PRIVATE
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
+        "-sUSE_SDL_MIXER=2"
         "-sSDL2_IMAGE_FORMATS=['png']"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sASYNCIFY"
@@ -176,6 +178,16 @@ else()
             GIT_SHALLOW TRUE
         )
 
+        set(SDLMIXER_VENDORED ON CACHE BOOL "" FORCE)
+        set(SDLMIXER_SAMPLES OFF CACHE BOOL "" FORCE)
+
+        FetchContent_Declare(
+            SDL2_mixer
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
+            GIT_TAG release-2.8.0
+            GIT_SHALLOW TRUE
+        )
+
         FetchContent_Declare(
             JoltPhysics
             GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
@@ -195,7 +207,7 @@ else()
         set(WEBGPU_BUILD_FROM_SOURCE OFF CACHE BOOL "" FORCE)
         set(WEBGPU_LINK_TYPE "SHARED" CACHE STRING "" FORCE)
 
-        FetchContent_MakeAvailable(SDL2 SDL2_image JoltPhysics WebGPU_Distribution)
+        FetchContent_MakeAvailable(SDL2 SDL2_image SDL2_mixer JoltPhysics WebGPU_Distribution)
     endif()
 
     set(WGPU_TARGET "")
@@ -234,6 +246,14 @@ else()
         target_link_libraries(aberrant_engine PRIVATE SDL2_image::SDL2_image)
     else()
         message(FATAL_ERROR "Could not locate SDL2_image target (tried: SDL2_image::SDL2_image-static, SDL2_image::SDL2_image).")
+    endif()
+
+    if(TARGET SDL2_mixer::SDL2_mixer-static)
+        target_link_libraries(aberrant_engine PRIVATE SDL2_mixer::SDL2_mixer-static)
+    elseif(TARGET SDL2_mixer::SDL2_mixer)
+        target_link_libraries(aberrant_engine PRIVATE SDL2_mixer::SDL2_mixer)
+    else()
+        message(FATAL_ERROR "Could not locate SDL2_mixer target (tried: SDL2_mixer::SDL2_mixer-static, SDL2_mixer::SDL2_mixer).")
     endif()
 
     if(COMMAND target_copy_webgpu_binaries)
