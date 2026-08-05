@@ -1,3 +1,4 @@
+#include <ranges>
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
@@ -154,7 +155,7 @@ public:
             JPH::EMotionType::Dynamic,
             Layers::MOVING
         );
-        characterSettings.mFriction = 0.7f;
+        characterSettings.mFriction = 0.0f;
         characterSettings.mLinearDamping = 0.12f;
         characterSettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
         characterBodyId = bodyInterface.CreateAndAddBody(characterSettings, JPH::EActivation::Activate);
@@ -715,7 +716,7 @@ bool EnsureRotationResources(GpuState &gpu)
     }
 
     gpu.rotationUniformBuffer = [&] {
-        const WGPUBufferDescriptor bufferDesc {
+        constexpr WGPUBufferDescriptor bufferDesc {
             .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
             .size = sizeof(RotationUniform),
             .mappedAtCreation = 0,
@@ -876,7 +877,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .fragment = &fragmentState,
     };
 
-    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
+    const auto pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
     wgpuShaderModuleRelease(shaderModule);
     return pipeline;
 }
@@ -1097,7 +1098,7 @@ bool ConfigureSurface(AppState &app)
     }
 
     app.gpu.defaultSamplerBindGroupLayout = [&] {
-        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
             WGPUBindGroupLayoutEntry{
                 .binding = 0,
                 .visibility = WGPUShaderStage_Fragment,
@@ -1288,11 +1289,9 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
-        auto it = meshes.find(obj->meshName);
-
-        if (it != meshes.end()) {
-            const Mesh& mesh = it->second;
-            for (const auto& primitive : mesh.primitives) {
+        if (auto it = meshes.find(obj->meshName); it != meshes.end()) {
+            const auto&[primitives] = it->second;
+            for (const auto& primitive : primitives) {
                 if (primitive.vertexCount != 0 && primitive.vertexBuffer != nullptr) {
                     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, primitive.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 }
@@ -1312,8 +1311,7 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
 
 std::array<uint8_t, OVERLAY_CHAR_HEIGHT> GetGlyphRows(char c)
 {
-    const char upperChar = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    switch (upperChar) {
+    switch (const char upperChar = static_cast<char>(std::toupper(static_cast<unsigned char>(c)))) {
         case 'A': return {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
         case 'B': return {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E};
         case 'C': return {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
@@ -1408,7 +1406,7 @@ void AppendOverlayText(std::vector<OverlayVertex> &vertices, const std::string &
     }
 }
 
-bool EnsureOverlayVertexBuffer(AppState &app, const uint64_t requiredVertices)
+bool EnsureOverlayVertexBuffer(const AppState &app, const uint64_t requiredVertices)
 {
     if (requiredVertices == 0) {
         return true;
@@ -1431,14 +1429,14 @@ bool EnsureOverlayVertexBuffer(AppState &app, const uint64_t requiredVertices)
     return overlayState.vertexBuffer != nullptr;
 }
 
-bool CreateOverlayResources(AppState &app, WGPUShaderModule overlayShader)
+bool CreateOverlayResources(const AppState &app, const WGPUShaderModule overlayShader)
 {
     overlayState.shader = overlayShader;
     if (!overlayState.shader) {
         return false;
     }
 
-    const auto blendState = WGPUBlendState{
+    constexpr auto blendState = WGPUBlendState{
         .color = WGPUBlendComponent{
             .operation = WGPUBlendOperation_Add,
             .srcFactor = WGPUBlendFactor_SrcAlpha,
@@ -1461,7 +1459,7 @@ bool CreateOverlayResources(AppState &app, WGPUShaderModule overlayShader)
         .targetCount = 1,
         .targets = &colorTarget,
     };
-    const auto attributes = std::to_array<WGPUVertexAttribute>({
+    constexpr auto attributes = std::to_array<WGPUVertexAttribute>({
         WGPUVertexAttribute{
             .format = WGPUVertexFormat_Float32x2,
             .offset = offsetof(OverlayVertex, position),
@@ -1524,15 +1522,14 @@ void ReleaseOverlayResources()
 
 void UpdateFpsCounter()
 {
-    const Uint64 now = SDL_GetPerformanceCounter();
+    const auto now = SDL_GetPerformanceCounter();
     if (overlayState.fpsCounterStart == 0) {
         overlayState.fpsCounterStart = now;
     }
     overlayState.fpsFrameCount += 1;
-    const Uint64 elapsed = now - overlayState.fpsCounterStart;
-    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-    const double elapsedSeconds = static_cast<double>(elapsed) / frequency;
-    if (elapsedSeconds >= FPS_UPDATE_INTERVAL_SECONDS) {
+    const auto elapsed = now - overlayState.fpsCounterStart;
+    const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    if (const auto elapsedSeconds = static_cast<double>(elapsed) / frequency; elapsedSeconds >= FPS_UPDATE_INTERVAL_SECONDS) {
         overlayState.currentFps = static_cast<float>(static_cast<double>(overlayState.fpsFrameCount) / elapsedSeconds);
         overlayState.fpsFrameCount = 0;
         overlayState.fpsCounterStart = now;
@@ -1551,10 +1548,10 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
     std::ostringstream fpsStream;
     fpsStream << std::fixed << std::setprecision(FPS_DISPLAY_PRECISION) << overlayState.currentFps;
     const std::string fpsText = "FPS: " + fpsStream.str();
-    const float charAdvance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * OVERLAY_TEXT_SCALE;
-    const float fpsWidth = static_cast<float>(fpsText.size()) * charAdvance;
-    const float fpsX = std::max(0.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN) - fpsWidth);
-    const float fpsY = static_cast<float>(OVERLAY_MARGIN);
+    constexpr auto charAdvance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * OVERLAY_TEXT_SCALE;
+    const auto fpsWidth = static_cast<float>(fpsText.size()) * charAdvance;
+    const auto fpsX = std::max(0.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN) - fpsWidth);
+    constexpr auto fpsY = static_cast<float>(OVERLAY_MARGIN);
     AppendOverlayText(
         vertices,
         fpsText,
@@ -1566,7 +1563,7 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         app.gpu.height
     );
 
-    const float statusYStart = fpsY + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
+    constexpr auto statusYStart = fpsY + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
     AppendOverlayText(
         vertices,
         hoverDebugText,
@@ -1588,9 +1585,9 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         app.gpu.height
     );
 
-    const float lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
-    const float usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
-    const float maxCharsPerLine = std::max(
+    constexpr auto lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
+    const auto usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
+    const auto maxCharsPerLine = std::max(
         1.0f,
         usableWidth / charAdvance
     );
@@ -1607,7 +1604,7 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
         visibleMessages.push_back(std::move(line));
     }
 
-    const float debugStartY = std::max(
+    const auto debugStartY = std::max(
         static_cast<float>(OVERLAY_MARGIN),
         static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN) - lineHeight * static_cast<float>(visibleMessages.size())
     );
@@ -1625,14 +1622,14 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
     }
 
     if (overlayState.consoleOpen) {
-        const float panelX = static_cast<float>(OVERLAY_MARGIN);
-        const float panelY = static_cast<float>(OVERLAY_MARGIN);
-        const float panelWidth = std::max(1.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN * 2));
-        const float panelHeight = std::max(
+        constexpr auto panelX = static_cast<float>(OVERLAY_MARGIN);
+        constexpr auto panelY = static_cast<float>(OVERLAY_MARGIN);
+        const auto panelWidth = std::max(1.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN * 2));
+        const auto panelHeight = std::max(
             lineHeight * 4.0f,
             static_cast<float>(app.gpu.height) * OVERLAY_CONSOLE_HEIGHT_RATIO
         );
-        const float panelBottom = std::min(
+        const auto panelBottom = std::min(
             static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN),
             panelY + panelHeight
         );
@@ -1647,11 +1644,11 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
             static_cast<float>(app.gpu.height)
         );
 
-        const float consoleTextX = panelX + static_cast<float>(OVERLAY_MARGIN);
-        const float consoleTitleY = panelY + static_cast<float>(OVERLAY_MARGIN);
-        const float consoleInputY = panelBottom - static_cast<float>(OVERLAY_MARGIN) - lineHeight;
-        const float textAreaHeight = std::max(0.0f, consoleInputY - (consoleTitleY + lineHeight));
-        const size_t maxHistoryLines = std::max<size_t>(1, static_cast<size_t>(textAreaHeight / lineHeight));
+        constexpr auto consoleTextX = panelX + static_cast<float>(OVERLAY_MARGIN);
+        constexpr auto consoleTitleY = panelY + static_cast<float>(OVERLAY_MARGIN);
+        const auto consoleInputY = panelBottom - static_cast<float>(OVERLAY_MARGIN) - lineHeight;
+        const auto textAreaHeight = std::max(0.0f, consoleInputY - (consoleTitleY + lineHeight));
+        const auto maxHistoryLines = std::max<size_t>(1, textAreaHeight / lineHeight);
 
         AppendOverlayText(
             vertices,
@@ -1664,11 +1661,11 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
             app.gpu.height
         );
 
-        const size_t linesToDraw = std::min(maxHistoryLines, overlayState.consoleLines.size());
-        const size_t lineStart = overlayState.consoleLines.size() - linesToDraw;
-        const float consoleTextWidth = std::max(1.0f, panelWidth - static_cast<float>(OVERLAY_MARGIN * 2));
-        const size_t maxConsoleChars = std::max<size_t>(1, static_cast<size_t>(consoleTextWidth / charAdvance));
-        for (size_t i = 0; i < linesToDraw; ++i) {
+        const auto linesToDraw = std::min(maxHistoryLines, overlayState.consoleLines.size());
+        const auto lineStart = overlayState.consoleLines.size() - linesToDraw;
+        const auto consoleTextWidth = std::max(1.0f, panelWidth - static_cast<float>(OVERLAY_MARGIN * 2));
+        const auto maxConsoleChars = std::max<size_t>(1, static_cast<size_t>(consoleTextWidth / charAdvance));
+        for (auto i = 0; i < linesToDraw; ++i) {
             std::string line = overlayState.consoleLines[lineStart + i];
             if (line.size() > maxConsoleChars) {
                 line.resize(maxConsoleChars);
@@ -1687,9 +1684,8 @@ void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
 
         std::string inputLine = "Input: " + overlayState.consoleInput + "_";
         if (inputLine.size() > maxConsoleChars) {
-            const std::string marker = "Input: ...";
-            if (maxConsoleChars > marker.size()) {
-                const size_t tailSize = maxConsoleChars - marker.size();
+            if (const std::string marker = "Input: ..."; maxConsoleChars > marker.size()) {
+                const auto tailSize = maxConsoleChars - marker.size();
                 inputLine = marker + inputLine.substr(inputLine.size() - tailSize);
             } else {
                 inputLine = inputLine.substr(0, maxConsoleChars);
@@ -1742,7 +1738,7 @@ bool DrawFrame(AppState &app)
     );
 #endif
 
-    WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+    auto view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
     if (!view) {
         wgpuTextureRelease(surfaceTexture.texture);
         return false;
@@ -1794,7 +1790,7 @@ bool DrawFrame(AppState &app)
     }
 
     auto shadowLight = directionalLight;
-    for (int cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
+    for (auto cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
         shadowLight.cascades[0] = directionalLight.cascades[cascadeIndex];
         wgpuQueueWriteBuffer(app.gpu.queue, app.gpu.lightUniformBuffer, 0, &shadowLight, sizeof(LightUniform));
 
@@ -1886,20 +1882,19 @@ bool DrawFrame(AppState &app)
         .colorAttachments = &colorAttachment2,
     };
 
-    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
-    RenderOverlay(app, pass);
-    wgpuRenderPassEncoderEnd(pass);
-    wgpuRenderPassEncoderRelease(pass);
-
 #ifdef TRIANGLE_SAMPLE
-    passDesc.depthStencilAttachment = nullptr;
-    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
     wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 #endif
+
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
+    RenderOverlay(app, pass);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
 
     WGPUCommandBuffer commandBuffer = wgpuCommandEncoderFinish(encoder, nullptr);
     if (!commandBuffer) {
@@ -1935,9 +1930,9 @@ struct DeviceRequestContext {
 
 bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *outAdapter)
 {
-    std::atomic<bool> done = false;
-    bool ok = false;
-    AdapterRequestContext context{&done, &ok, outAdapter};
+    std::atomic done = false;
+    auto ok = false;
+    AdapterRequestContext context{.done = &done, .ok = &ok, .adapter = outAdapter};
 
     WGPURequestAdapterCallbackInfo callbackInfo{};
 #if defined(__EMSCRIPTEN__)
@@ -1946,7 +1941,7 @@ bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *out
     callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
 #endif
     callbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView, void *userdata1, void *) {
-        auto *state = static_cast<AdapterRequestContext *>(userdata1);
+        const auto *state = static_cast<AdapterRequestContext *>(userdata1);
         if (status == WGPURequestAdapterStatus_Success && adapter != nullptr) {
             *state->ok = true;
             *state->adapter = adapter;
@@ -1974,9 +1969,9 @@ bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *out
 
 bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDevice)
 {
-    std::atomic<bool> done = false;
-    bool ok = false;
-    DeviceRequestContext context{&done, &ok, outDevice};
+    std::atomic done = false;
+    auto ok = false;
+    DeviceRequestContext context{.done = &done, .ok = &ok, .device = outDevice};
 
     WGPURequestDeviceCallbackInfo callbackInfo{};
 #if defined(__EMSCRIPTEN__)
@@ -1985,7 +1980,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
     callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
 #endif
     callbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView, void *userdata1, void *) {
-        auto *state = static_cast<DeviceRequestContext *>(userdata1);
+        const auto *state = static_cast<DeviceRequestContext *>(userdata1);
         if (status == WGPURequestDeviceStatus_Success && device != nullptr) {
             *state->ok = true;
             *state->device = device;
@@ -1994,7 +1989,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
     };
     callbackInfo.userdata1 = &context;
 
-    WGPUDeviceDescriptor deviceDesc{};
+    constexpr WGPUDeviceDescriptor deviceDesc{};
     wgpuAdapterRequestDevice(adapter, &deviceDesc, callbackInfo);
 
     while (!done.load()) {
@@ -2011,7 +2006,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
 
 bool InitializeGraphics(AppState &app)
 {
-    WGPUInstanceDescriptor instanceDesc{};
+    constexpr WGPUInstanceDescriptor instanceDesc{};
     app.gpu.instance = wgpuCreateInstance(&instanceDesc);
     if (!app.gpu.instance) {
         std::cerr << "Failed to create WebGPU instance\n";
@@ -2133,17 +2128,17 @@ void PumpEvents(AppState &app)
 
 void FramerateLimiter(const double targetHz = 120.0f)
 {
-    const double targetFrameSec = 1.0 / targetHz;
-    const Uint64 freq = SDL_GetPerformanceFrequency();
+    const auto targetFrameSec = 1.0 / targetHz;
+    const auto freq = SDL_GetPerformanceFrequency();
 
-    static Uint64 nextFrame = SDL_GetPerformanceCounter();
+    static auto nextFrame = SDL_GetPerformanceCounter();
     nextFrame += static_cast<Uint64>(targetFrameSec * freq);
 
     while (true) {
-        const Uint64 now = SDL_GetPerformanceCounter();
+        const auto now = SDL_GetPerformanceCounter();
         if (now >= nextFrame) break;
 
-        if (const double remainingSec = static_cast<double>(nextFrame - now) / static_cast<double>(freq); remainingSec > 0.002)
+        if (const auto remainingSec = static_cast<double>(nextFrame - now) / static_cast<double>(freq); remainingSec > 0.002)
         {
             SDL_Delay(static_cast<Uint32>((remainingSec - 0.001) * 1000.0));
         }
@@ -2157,7 +2152,7 @@ void FramerateLimiter(const double targetHz = 120.0f)
 
 void UpdateFrameTiming(AppState &app)
 {
-    const Uint64 now = SDL_GetPerformanceCounter();
+    const auto now = SDL_GetPerformanceCounter();
     if (app.lastFrameCounter == 0) {
         app.lastFrameCounter = now;
         app.frameDeltaSeconds = 1.0f / 60.0f;
@@ -2165,9 +2160,9 @@ void UpdateFrameTiming(AppState &app)
         return;
     }
 
-    const Uint64 elapsed = now - app.lastFrameCounter;
+    const auto elapsed = now - app.lastFrameCounter;
     app.lastFrameCounter = now;
-    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.frameDeltaSeconds = static_cast<float>(static_cast<double>(elapsed) / frequency);
     app.frameDeltaSeconds = std::clamp(app.frameDeltaSeconds, 0.0f, 0.1f);
     UpdateFpsCounter();
@@ -2181,8 +2176,8 @@ void UpdateCameraFromInput(AppState &app)
         return;
     }
 
-    const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
-    float moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
+    const auto *keyboardState = SDL_GetKeyboardState(nullptr);
+    auto moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
     if (keyboardState[SDL_SCANCODE_LSHIFT] || keyboardState[SDL_SCANCODE_RSHIFT]) {
         moveDelta *= CAMERA_MOVE_BOOST;
     }
@@ -2230,14 +2225,14 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
     SDL_GetMouseState(&mouseX, &mouseY);
 
     const glm::vec4 viewport(0.0f, 0.0f, static_cast<float>(app.gpu.width), static_cast<float>(app.gpu.height));
-    const float clampedX = static_cast<float>(std::clamp(mouseX, 0, static_cast<int>(app.gpu.width)));
-    const float clampedY = static_cast<float>(std::clamp(mouseY, 0, static_cast<int>(app.gpu.height)));
+    const auto clampedX = static_cast<float>(std::clamp(mouseX, 0, static_cast<int>(app.gpu.width)));
+    const auto clampedY = static_cast<float>(std::clamp(mouseY, 0, static_cast<int>(app.gpu.height)));
     const glm::vec3 screenNear(clampedX, static_cast<float>(app.gpu.height) - clampedY, 0.0f);
     const glm::vec3 screenFar(clampedX, static_cast<float>(app.gpu.height) - clampedY, 1.0f);
 
-    const glm::vec3 worldNear = glm::unProject(screenNear, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
-    const glm::vec3 worldFar = glm::unProject(screenFar, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
-    const glm::vec3 rayDirection = worldFar - worldNear;
+    const auto worldNear = glm::unProject(screenNear, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const auto worldFar = glm::unProject(screenFar, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const auto rayDirection = worldFar - worldNear;
     if (glm::length(rayDirection) <= 0.0001f) {
         return false;
     }
@@ -2249,7 +2244,7 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
 
 void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
 {
-    const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
+    const auto *keyboardState = SDL_GetKeyboardState(nullptr);
     jolt.ApplyCharacterInput(keyboardState);
     jolt.StepSimulation(app.frameDeltaSeconds);
     jolt.SyncScene(gameObject1, capsuleCharacterObject);
@@ -2263,7 +2258,7 @@ void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
         return;
     }
 
-    const std::string hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
+    const auto hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
     hoverDebugText = hoveredObject.empty() ? "Hover: None" : "Hover: " + hoveredObject;
 }
 
@@ -2289,8 +2284,8 @@ void WasmMainLoop(void *userdata)
 
 } // namespace
 
-std::string readShaderFile(const std::string& filepath) {
-    std::ifstream file(filepath);
+static std::string readShaderFile(const std::string& filepath) {
+    const std::ifstream file(filepath);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file: " + filepath);
     }
@@ -2299,14 +2294,14 @@ std::string readShaderFile(const std::string& filepath) {
     return buffer.str();
 }
 
-WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepath) {
+static WGPUShaderModule createShaderModule(const WGPUDevice device, const std::string& filepath) {
     const std::string shaderCode = readShaderFile(filepath);
     WGPUShaderSourceWGSL wgslSource {
         .chain = WGPUChainedStruct{
             .next = nullptr,
             .sType = WGPUSType_ShaderSourceWGSL
         },
-        .code = {shaderCode.c_str(), WGPU_STRLEN},
+        .code = {.data = shaderCode.c_str(), .length = WGPU_STRLEN},
     };
 
     const WGPUShaderModuleDescriptor shaderDesc {
@@ -2318,7 +2313,7 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
 
 int main()
 {
-    auto player = GameObject::Instantiate(glm::vec3(2.0f, 0.0f, -2.0f), glm::identity<glm::quat>());
+    // auto player = GameObject::Instantiate(glm::vec3(2.0f, 0.0f, -2.0f), glm::identity<glm::quat>());
     IMG_Init(IMG_INIT_PNG);
 
     gameObject1.meshName = "cube";
@@ -2433,21 +2428,19 @@ int main()
 
     AssetManager assetManager(app.gpu.device, app.gpu.queue);
 
-    std::vector<Primitive> cube_primitives = std::vector<Primitive>{
+    auto cube_primitives = std::vector{
         Primitive::CreateFromPremadeData(app.gpu.device, boxVertices, boxIndices, "sample.png"),
     };
     meshes["cube"] = Mesh { .primitives = cube_primitives };
 
-    std::vector<Primitive> plane_primitives = std::vector<Primitive>{
+    auto plane_primitives = std::vector{
         Primitive::CreateFromPremadeData(app.gpu.device, planeVertices, planeIndices, "sample.png"),
     };
     meshes["plane"] = Mesh { .primitives = plane_primitives };
 
-    const std::string modelPath = "assets/BoomBox.gltf";
-    if (std::filesystem::exists(modelPath)) {
+    if (const std::string modelPath = "assets/BoomBox.gltf"; std::filesystem::exists(modelPath)) {
         std::vector<Primitive> boomBoxPrimitives;
-        std::string loadError;
-        if (LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
+        if (std::string loadError; LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
             meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
             objects.push_back(&gameObject2);
             PushDebugMessage("Loaded glTF model: " + modelPath);
@@ -2473,7 +2466,7 @@ int main()
     app.gpu.cameraUniformBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &cameraUniformBufferDesc);
 
     std::cout << "Creating bind group layouts for meshes\n";
-    const auto meshBindGroupLayoutEntries = std::to_array<WGPUBindGroupLayoutEntry>({
+    constexpr auto meshBindGroupLayoutEntries = std::to_array<WGPUBindGroupLayoutEntry>({
         WGPUBindGroupLayoutEntry{
             .binding = 0,
             .visibility = WGPUShaderStage_Vertex,
@@ -2516,7 +2509,7 @@ int main()
     }
 
     app.gpu.sceneBindGroupLayout = [&] {
-        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
             WGPUBindGroupLayoutEntry{
                 .binding = 0,
                 .visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment,
@@ -2729,7 +2722,7 @@ int main()
 
     std::cout << "Creating forward renderer pipeline\n";
     pipelines["forwardRenderer"] = [&] {
-        WGPUVertexAttribute vertexAttributes[] = {
+        constexpr WGPUVertexAttribute vertexAttributes[] = {
             {
                 .format = WGPUVertexFormat_Float32x3,
                 .offset = offsetof(Vertex, position),
@@ -2904,8 +2897,8 @@ int main()
 
     activeJoltRuntime = nullptr;
 
-    for (const auto& [key, value] : meshes) {
-        for (const auto& primitive : value.primitives) {
+    for (const auto &[primitives]: meshes | std::views::values) {
+        for (const auto& primitive : primitives) {
             if (primitive.vertexBuffer) {
                 wgpuBufferRelease(primitive.vertexBuffer);
             }
