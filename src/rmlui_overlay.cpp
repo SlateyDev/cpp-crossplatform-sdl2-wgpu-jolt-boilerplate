@@ -792,6 +792,7 @@ body { margin: 0; color: #d6e3ff; font-family: OverlayDefault; font-size: 18px; 
 #status { position: absolute; left: 8px; top: 8px; width: 60%; white-space: nowrap; }
 #status-hover { display: block; }
 #status-character { color: #f4c7c7; display: block; }
+#status-navmesh { display: block; }
 #debug { position: absolute; left: 8px; top: 8px; white-space: pre; color: #d0dbe8; }
 #console {
     position: absolute;
@@ -819,6 +820,7 @@ body { margin: 0; color: #d6e3ff; font-family: OverlayDefault; font-size: 18px; 
   <div id="status">
     <div id="status-hover"></div>
     <div id="status-character"></div>
+    <div id="status-navmesh"></div>
   </div>
   <div id="debug"></div>
   <div id="console" class="hidden">
@@ -863,6 +865,7 @@ struct RmlUiOverlay::Impl {
     std::string characterText = "Character: Airborne";
     std::deque<std::string> debugMessages;
     std::deque<std::string> consoleLines;
+    std::string navmeshDebug;
     std::string renderedConsoleLinesRml;
     bool pendingConsoleAutoScroll = false;
     bool consoleOpen = false;
@@ -976,6 +979,7 @@ void RmlUiOverlay::SetData(
     const float fps,
     const std::string &hoverText,
     const std::string &characterText,
+    const std::string &navmeshDebug,
     const std::deque<std::string> &debugMessages,
     const std::deque<std::string> &consoleLines,
     const bool consoleOpen,
@@ -988,6 +992,7 @@ void RmlUiOverlay::SetData(
     impl->fps = fps;
     impl->hoverText = hoverText;
     impl->characterText = characterText;
+    impl->navmeshDebug = navmeshDebug;
     impl->debugMessages = debugMessages;
     impl->consoleLines = consoleLines;
     impl->consoleOpen = consoleOpen;
@@ -1004,6 +1009,7 @@ void RmlUiOverlay::PrepareFrame() const
     auto *rootElement = impl->document->GetElementById("root");
     auto *hoverElement = impl->document->GetElementById("status-hover");
     auto *characterElement = impl->document->GetElementById("status-character");
+    auto *navmeshElement = impl->document->GetElementById("status-navmesh");
     auto *debugElement = impl->document->GetElementById("debug");
     auto *consoleElement = impl->document->GetElementById("console");
     auto *consoleLinesElement = impl->document->GetElementById("console-lines");
@@ -1028,6 +1034,9 @@ void RmlUiOverlay::PrepareFrame() const
     }
     if (characterElement != nullptr) {
         characterElement->SetInnerRML(EscapeRmlText(impl->characterText));
+    }
+    if (navmeshElement != nullptr) {
+        navmeshElement->SetInnerRML(EscapeRmlText(impl->navmeshDebug));
     }
     if (debugElement != nullptr) {
         constexpr int overlayMargin = 8;

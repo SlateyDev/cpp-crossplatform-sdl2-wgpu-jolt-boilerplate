@@ -30,6 +30,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 extern "C" {
 #include <lauxlib.h>
@@ -49,6 +50,7 @@ extern "C" {
 #include <array>
 #include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -58,9 +60,11 @@ extern "C" {
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
+#include "navmesh_runtime.hpp"
 #include "primitive.hpp"
 #include "rmlui_overlay.hpp"
 #include "structures.hpp"
@@ -71,6 +75,9 @@ extern "C" {
 #include "Engine/EngineTexture.hpp"
 
 namespace {
+
+constexpr glm::vec3 PLANE_COLLIDER_HALF_EXTENTS = glm::vec3(20.0f, 0.5f, 20.0f);
+constexpr glm::vec3 BOX_COLLIDER_HALF_EXTENTS = glm::vec3(0.5f, 0.5f, 0.5f);
 
 void TraceImpl(const char *inFormat, ...)
 {
@@ -132,7 +139,7 @@ public:
         return true;
     }
 
-    bool CreateScene(const glm::vec3 &planePosition, const glm::vec3 &boxPosition, const glm::vec3 &characterPosition)
+    bool CreateScene(const glm::vec3 &planePosition, const glm::vec3 &boxPosition, const glm::vec3 &box1Position, const glm::vec3 &characterPosition)
     {
         if (!initialized || !physicsSystem) {
             return false;
@@ -140,7 +147,7 @@ public:
 
         auto &bodyInterface = physicsSystem->GetBodyInterface();
 
-        const JPH::RefConst<JPH::Shape> planeShape = new JPH::BoxShape(JPH::Vec3(20.0f, 0.5f, 20.0f));
+        const JPH::RefConst<JPH::Shape> planeShape = new JPH::BoxShape(ToVec3(PLANE_COLLIDER_HALF_EXTENTS));
         const JPH::BodyCreationSettings planeSettings(
             planeShape,
             ToRVec3(glm::vec3(planePosition.x, planePosition.y - 0.5f, planePosition.z)),
@@ -150,7 +157,7 @@ public:
         );
         planeBodyId = bodyInterface.CreateAndAddBody(planeSettings, JPH::EActivation::DontActivate);
 
-        const JPH::RefConst<JPH::Shape> boxShape = new JPH::BoxShape(JPH::Vec3(0.5f, 0.5f, 0.5f));
+        const JPH::RefConst<JPH::Shape> boxShape = new JPH::BoxShape(ToVec3(BOX_COLLIDER_HALF_EXTENTS));
         const JPH::BodyCreationSettings boxSettings(
             boxShape,
             ToRVec3(boxPosition),
@@ -159,6 +166,16 @@ public:
             Layers::NON_MOVING
         );
         boxBodyId = bodyInterface.CreateAndAddBody(boxSettings, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> boxShape1 = new JPH::BoxShape(ToVec3(BOX_COLLIDER_HALF_EXTENTS));
+        const JPH::BodyCreationSettings boxSettings1(
+            boxShape1,
+            ToRVec3(box1Position),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        boxBody1Id = bodyInterface.CreateAndAddBody(boxSettings1, JPH::EActivation::DontActivate);
 
         const JPH::RefConst<JPH::Shape> characterShape = new JPH::CapsuleShape(0.6f, 0.3f);
         JPH::BodyCreationSettings characterSettings(
@@ -172,7 +189,7 @@ public:
         characterSettings.mLinearDamping = 0.12f;
         characterSettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
         characterBodyId = bodyInterface.CreateAndAddBody(characterSettings, JPH::EActivation::Activate);
-        sceneCreated = !planeBodyId.IsInvalid() && !boxBodyId.IsInvalid() && !characterBodyId.IsInvalid();
+        sceneCreated = !planeBodyId.IsInvalid() && !boxBodyId.IsInvalid() && !boxBody1Id.IsInvalid() && !characterBodyId.IsInvalid();
         return sceneCreated;
     }
 
@@ -260,6 +277,9 @@ public:
         if (hitResult.mBodyID == boxBodyId) {
             return "Box";
         }
+        if (hitResult.mBodyID == boxBody1Id) {
+            return "Box1";
+        }
         return {};
     }
 
@@ -278,6 +298,7 @@ public:
             auto &bodyInterface = physicsSystem->GetBodyInterface();
             DestroyBodyIfValid(bodyInterface, characterBodyId);
             DestroyBodyIfValid(bodyInterface, boxBodyId);
+            DestroyBodyIfValid(bodyInterface, boxBody1Id);
             DestroyBodyIfValid(bodyInterface, planeBodyId);
         }
 
@@ -418,6 +439,7 @@ private:
     std::unique_ptr<JPH::PhysicsSystem> physicsSystem;
     JPH::BodyID planeBodyId;
     JPH::BodyID boxBodyId;
+    JPH::BodyID boxBody1Id;
     JPH::BodyID characterBodyId;
     bool jumpHeld = false;
 };
@@ -472,7 +494,12 @@ std::vector<MeshInstance*> objects;
 MeshInstance gameObject1;
 MeshInstance gameObject2;
 MeshInstance gameObject3;
+MeshInstance gameObject4;
 MeshInstance capsuleCharacterObject;
+std::vector<MeshInstance> navMeshDebugVertexObjects;
+std::vector<MeshInstance> navMeshDebugEdgeObjects;
+std::vector<MeshInstance> navPathDebugPointObjects;
+std::vector<MeshInstance> navPathDebugSegmentObjects;
 
 AudioManager audioManager;
 constexpr auto DEFAULT_SFX_NAME = "default_sfx";
@@ -557,6 +584,221 @@ struct OverlayState {
 OverlayState overlayState;
 std::string hoverDebugText = "Hover: None";
 std::string characterDebugText = "Character: Airborne";
+std::string navMeshDebugText = "NavMesh: Not initialized";
+
+constexpr size_t NAV_PATH_DEBUG_MAX_POINTS = 64;
+constexpr float NAVMESH_DEBUG_HEIGHT_OFFSET = 0.06f;
+constexpr float NAVMESH_DEBUG_VERTEX_MARKER_SCALE = 0.2f;
+constexpr float NAVMESH_DEBUG_EDGE_THICKNESS = 0.08f;
+constexpr float NAV_PATH_DEBUG_POINT_MARKER_SCALE = 0.18f;
+constexpr float NAV_PATH_DEBUG_SEGMENT_THICKNESS = 0.1f;
+
+void AppendPlaneTopNavGeometry(const glm::vec3 &planePosition, const glm::vec3 &halfExtents, std::vector<float> &outVertices, std::vector<int> &outIndices)
+{
+    const int vertexOffset = static_cast<int>(outVertices.size() / 3);
+    const float y = planePosition.y;
+
+    outVertices.insert(outVertices.end(), {
+        planePosition.x - halfExtents.x, y, planePosition.z - halfExtents.z,
+        planePosition.x + halfExtents.x, y, planePosition.z - halfExtents.z,
+        planePosition.x + halfExtents.x, y, planePosition.z + halfExtents.z,
+        planePosition.x - halfExtents.x, y, planePosition.z + halfExtents.z
+    });
+
+    outIndices.insert(outIndices.end(), {
+        vertexOffset + 0, vertexOffset + 2, vertexOffset + 1,
+        vertexOffset + 0, vertexOffset + 3, vertexOffset + 2
+    });
+}
+
+void AppendBoxNavGeometry(const glm::vec3 &boxCenter, const glm::vec3 &halfExtents, std::vector<float> &outVertices, std::vector<int> &outIndices)
+{
+    const int vertexOffset = static_cast<int>(outVertices.size() / 3);
+    const glm::vec3 scale = halfExtents * 2.0f;
+
+    outVertices.reserve(outVertices.size() + (boxVertices.size() * 3));
+    for (const auto &vertex : boxVertices) {
+        const glm::vec3 worldPosition = boxCenter + (vertex.position * scale);
+        outVertices.push_back(worldPosition.x);
+        outVertices.push_back(worldPosition.y);
+        outVertices.push_back(worldPosition.z);
+    }
+
+    outIndices.reserve(outIndices.size() + boxIndices.size());
+    for (const int index : boxIndices) {
+        outIndices.push_back(vertexOffset + index);
+    }
+}
+
+void BuildNavMeshSourceGeometry(
+    const glm::vec3 &planePosition,
+    const glm::vec3 &boxPositionA,
+    const glm::vec3 &boxPositionB,
+    std::vector<float> &outVertices,
+    std::vector<int> &outIndices)
+{
+    outVertices.clear();
+    outIndices.clear();
+    outVertices.reserve((4 + (boxVertices.size() * 2)) * 3);
+    outIndices.reserve(6 + (boxIndices.size() * 2));
+
+    AppendPlaneTopNavGeometry(planePosition, PLANE_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+    AppendBoxNavGeometry(boxPositionA, BOX_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+    AppendBoxNavGeometry(boxPositionB, BOX_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+}
+
+MeshInstance CreateDebugCubeObject(const std::string &name)
+{
+    MeshInstance instance;
+    instance.meshName = "cube";
+    instance.translation = glm::vec3(0.0f);
+    instance.rotation = glm::identity<glm::quat>();
+    instance.scale = glm::vec3(0.0f);
+    (void)name;
+    return instance;
+}
+
+void HideDebugObject(MeshInstance &object)
+{
+    object.scale = glm::vec3(0.0f);
+}
+
+void PlaceDebugPoint(MeshInstance &object, const glm::vec3 &position, const float scale, const float yOffset)
+{
+    object.translation = position + glm::vec3(0.0f, yOffset, 0.0f);
+    object.rotation = glm::identity<glm::quat>();
+    object.scale = glm::vec3(scale);
+}
+
+void PlaceDebugSegment(MeshInstance &object, const glm::vec3 &start, const glm::vec3 &end, const float thickness, const float yOffset)
+{
+    const glm::vec3 segment = end - start;
+    const float length = glm::length(segment);
+    if (length <= 0.0001f) {
+        HideDebugObject(object);
+        return;
+    }
+
+    const glm::vec3 direction = segment / length;
+    const glm::vec3 midpoint = (start + end) * 0.5f + glm::vec3(0.0f, yOffset, 0.0f);
+
+    // Cube forward axis is +Z, rotate that to the segment direction.
+    const glm::quat rotation = glm::rotation(glm::vec3(0.0f, 0.0f, 1.0f), direction);
+    object.translation = midpoint;
+    object.rotation = rotation;
+    object.scale = glm::vec3(thickness, thickness, length);
+}
+
+void InitializeNavDebugObjects(const std::vector<float> &navMeshVertices, const std::vector<int> &navMeshIndices)
+{
+    navMeshDebugVertexObjects.clear();
+    navMeshDebugEdgeObjects.clear();
+    navPathDebugPointObjects.clear();
+    navPathDebugSegmentObjects.clear();
+
+    const size_t navVertexCount = navMeshVertices.size() / 3;
+    navMeshDebugVertexObjects.reserve(navVertexCount);
+    for (size_t index = 0; index < navVertexCount; ++index) {
+        const size_t base = index * 3;
+        auto object = CreateDebugCubeObject("navmesh-vertex");
+        PlaceDebugPoint(
+            object,
+            glm::vec3(navMeshVertices[base], navMeshVertices[base + 1], navMeshVertices[base + 2]),
+            NAVMESH_DEBUG_VERTEX_MARKER_SCALE,
+            NAVMESH_DEBUG_HEIGHT_OFFSET
+        );
+        navMeshDebugVertexObjects.push_back(object);
+    }
+
+    std::vector<std::pair<int, int>> navEdges;
+    navEdges.reserve(navMeshIndices.size());
+    std::unordered_set<uint64_t> uniqueEdges;
+    for (size_t triangle = 0; triangle + 2 < navMeshIndices.size(); triangle += 3) {
+        const std::array triangleIndices = {
+            navMeshIndices[triangle],
+            navMeshIndices[triangle + 1],
+            navMeshIndices[triangle + 2]
+        };
+        for (int edge = 0; edge < 3; ++edge) {
+            const int indexA = triangleIndices[edge];
+            const int indexB = triangleIndices[(edge + 1) % 3];
+            const int low = std::min(indexA, indexB);
+            const int high = std::max(indexA, indexB);
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(low)) << 32u) | static_cast<uint32_t>(high);
+            if (uniqueEdges.insert(key).second) {
+                navEdges.emplace_back(low, high);
+            }
+        }
+    }
+
+    navMeshDebugEdgeObjects.reserve(navEdges.size());
+    for (const auto &[startIndex, endIndex] : navEdges) {
+        const size_t startBase = static_cast<size_t>(startIndex) * 3;
+        const size_t endBase = static_cast<size_t>(endIndex) * 3;
+        auto object = CreateDebugCubeObject("navmesh-edge");
+        PlaceDebugSegment(
+            object,
+            glm::vec3(navMeshVertices[startBase], navMeshVertices[startBase + 1], navMeshVertices[startBase + 2]),
+            glm::vec3(navMeshVertices[endBase], navMeshVertices[endBase + 1], navMeshVertices[endBase + 2]),
+            NAVMESH_DEBUG_EDGE_THICKNESS,
+            NAVMESH_DEBUG_HEIGHT_OFFSET
+        );
+        navMeshDebugEdgeObjects.push_back(object);
+    }
+
+    navPathDebugPointObjects.reserve(NAV_PATH_DEBUG_MAX_POINTS);
+    navPathDebugSegmentObjects.reserve(NAV_PATH_DEBUG_MAX_POINTS > 0 ? NAV_PATH_DEBUG_MAX_POINTS - 1 : 0);
+    for (size_t index = 0; index < NAV_PATH_DEBUG_MAX_POINTS; ++index) {
+        navPathDebugPointObjects.push_back(CreateDebugCubeObject("nav-path-point"));
+        if (index + 1 < NAV_PATH_DEBUG_MAX_POINTS) {
+            navPathDebugSegmentObjects.push_back(CreateDebugCubeObject("nav-path-segment"));
+        }
+    }
+
+    for (auto &object : navMeshDebugVertexObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navMeshDebugEdgeObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navPathDebugPointObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navPathDebugSegmentObjects) {
+        objects.push_back(&object);
+    }
+}
+
+size_t UpdateNavPathDebugObjects(const std::vector<glm::vec3> &pathPoints)
+{
+    const size_t visiblePoints = std::min(pathPoints.size(), NAV_PATH_DEBUG_MAX_POINTS);
+    for (size_t index = 0; index < navPathDebugPointObjects.size(); ++index) {
+        auto &object = navPathDebugPointObjects[index];
+        if (index < visiblePoints) {
+            PlaceDebugPoint(object, pathPoints[index], NAV_PATH_DEBUG_POINT_MARKER_SCALE, NAVMESH_DEBUG_HEIGHT_OFFSET * 2.0f);
+        } else {
+            HideDebugObject(object);
+        }
+    }
+
+    const size_t visibleSegments = visiblePoints > 1 ? visiblePoints - 1 : 0;
+    for (size_t index = 0; index < navPathDebugSegmentObjects.size(); ++index) {
+        auto &object = navPathDebugSegmentObjects[index];
+        if (index < visibleSegments) {
+            PlaceDebugSegment(
+                object,
+                pathPoints[index],
+                pathPoints[index + 1],
+                NAV_PATH_DEBUG_SEGMENT_THICKNESS,
+                NAVMESH_DEBUG_HEIGHT_OFFSET * 2.0f
+            );
+        } else {
+            HideDebugObject(object);
+        }
+    }
+
+    return visiblePoints;
+}
 
 void PushDebugMessage(const std::string &message, const bool logAsError = false)
 {
@@ -1495,6 +1737,7 @@ void PrepareRmlOverlay(AppState &app)
         overlayState.currentFps,
         hoverDebugText,
         characterDebugText,
+        navMeshDebugText,
         overlayState.debugMessages,
         overlayState.consoleLines,
         overlayState.consoleOpen,
@@ -2057,7 +2300,7 @@ bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
     return true;
 }
 
-void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
+void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt, NavMeshRuntime &navMesh)
 {
     const auto *keyboardState = SDL_GetKeyboardState(nullptr);
     if (!overlayState.consoleOpen) {
@@ -2077,9 +2320,20 @@ void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt)
 
     const auto hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
     hoverDebugText = hoveredObject.empty() ? "Hover: None" : "Hover: " + hoveredObject;
+
+    std::vector<glm::vec3> navPathPoints;
+    const bool hasPath = navMesh.FindPath(capsuleCharacterObject.translation, gameObject1.translation, navPathPoints);
+    if (hasPath) {
+        const size_t shownPoints = UpdateNavPathDebugObjects(navPathPoints);
+        navMeshDebugText = "NavMesh: Path points " + std::to_string(navPathPoints.size()) + " (showing " + std::to_string(shownPoints) + ")";
+    } else {
+        UpdateNavPathDebugObjects({});
+        navMeshDebugText = "NavMesh: No path";
+    }
 }
 
 JoltRuntime *activeJoltRuntime = nullptr;
+NavMeshRuntime *activeNavMeshRuntime = nullptr;
 
 #if defined(__EMSCRIPTEN__)
 void WasmMainLoop(void *userdata)
@@ -2092,8 +2346,8 @@ void WasmMainLoop(void *userdata)
         return;
     }
     UpdateCameraFromInput(*app);
-    if (activeJoltRuntime != nullptr) {
-        UpdatePhysicsScene(*app, *activeJoltRuntime);
+    if (activeJoltRuntime != nullptr && activeNavMeshRuntime != nullptr) {
+        UpdatePhysicsScene(*app, *activeJoltRuntime, *activeNavMeshRuntime);
     }
     DrawFrame(*app);
 }
@@ -2148,6 +2402,11 @@ int main()
     gameObject3.rotation = glm::quat(glm::vec3(-0.5f * glm::pi<float>(), 0.0f, 0.0f));
     gameObject3.scale = glm::vec3(40.0f, 40.0f, 40.0f);
 
+    gameObject4.meshName = "cube";
+    gameObject4.translation = glm::vec3(2.0f, -3.5f, 2.0f);
+    gameObject4.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
+    gameObject4.scale = glm::vec3(1.0f, 1.0f, 1.0f);
+
     capsuleCharacterObject.meshName = "cube";
     capsuleCharacterObject.translation = glm::vec3(-2.0f, -2.8f, -2.0f);
     capsuleCharacterObject.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
@@ -2156,6 +2415,7 @@ int main()
     objects.push_back(&gameObject1);
     // objects.push_back(gameObject2);
     objects.push_back(&gameObject3);
+    objects.push_back(&gameObject4);
     objects.push_back(&capsuleCharacterObject);
 
     SDL_SetMainReady();
@@ -2166,12 +2426,32 @@ int main()
         return 1;
     }
     PushDebugMessage("Jolt initialized");
-    if (!jolt.CreateScene(gameObject3.translation, gameObject1.translation, capsuleCharacterObject.translation)) {
+    if (!jolt.CreateScene(gameObject3.translation, gameObject1.translation, gameObject4.translation, capsuleCharacterObject.translation)) {
         PushDebugMessage("Failed to create Jolt collision scene", true);
         return 1;
     }
     PushDebugMessage("Jolt collision scene initialized (plane, box, capsule)");
     activeJoltRuntime = &jolt;
+
+    NavMeshRuntime navMesh;
+    std::vector<float> navMeshVertices;
+    std::vector<int> navMeshIndices;
+    BuildNavMeshSourceGeometry(
+        gameObject3.translation,
+        gameObject1.translation,
+        gameObject4.translation,
+        navMeshVertices,
+        navMeshIndices
+    );
+    if (!navMesh.Build(navMeshVertices, navMeshIndices)) {
+        PushDebugMessage(navMesh.GetStatus(), true);
+        return 1;
+    }
+    navMeshDebugText = navMesh.GetStatus();
+    PushDebugMessage("Recast/Detour navmesh initialized");
+    InitializeNavDebugObjects(navMeshVertices, navMeshIndices);
+    PushDebugMessage("Navmesh and nav path debug visualization enabled");
+    activeNavMeshRuntime = &navMesh;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
@@ -2719,7 +2999,7 @@ int main()
             break;
         }
         UpdateCameraFromInput(app);
-        UpdatePhysicsScene(app, jolt);
+        UpdatePhysicsScene(app, jolt, navMesh);
         if (!DrawFrame(app)) {
             PushDebugMessage("DrawFrame failed", true);
             break;
@@ -2728,6 +3008,7 @@ int main()
     }
 
     activeJoltRuntime = nullptr;
+    activeNavMeshRuntime = nullptr;
 
     for (const auto &[primitives]: meshes | std::views::values) {
         for (const auto& primitive : primitives) {

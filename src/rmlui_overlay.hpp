@@ -16,6 +16,7 @@ public:
         float fps,
         const std::string &hoverText,
         const std::string &characterText,
+        const std::string &navmeshDebug,
         const std::deque<std::string> &debugMessages,
         const std::deque<std::string> &consoleLines,
         bool consoleOpen,
