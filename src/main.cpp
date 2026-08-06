@@ -62,6 +62,7 @@ extern "C" {
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
 #include "primitive.hpp"
+#include "rmlui_overlay.hpp"
 #include "structures.hpp"
 
 #include "Engine/GameObject.hpp"
@@ -474,10 +475,10 @@ MeshInstance gameObject3;
 MeshInstance capsuleCharacterObject;
 
 AudioManager audioManager;
-constexpr const char* DEFAULT_SFX_NAME = "default_sfx";
-constexpr const char* DEFAULT_MUSIC_NAME = "default_music";
-constexpr const char* DEFAULT_SFX_PATH = "assets/audio/sfx.wav";
-constexpr const char* DEFAULT_MUSIC_PATH = "assets/audio/music.ogg";
+constexpr auto DEFAULT_SFX_NAME = "default_sfx";
+constexpr auto DEFAULT_MUSIC_NAME = "default_music";
+constexpr auto DEFAULT_SFX_PATH = "assets/audio/sfx.wav";
+constexpr auto DEFAULT_MUSIC_PATH = "assets/audio/music.ogg";
 
 constexpr WGPUTextureFormat DEPTH_FORMAT = WGPUTextureFormat_Depth32Float;
 
@@ -536,32 +537,13 @@ struct FlyCamera : public Camera {
 
 FlyCamera flyCamera;
 
-constexpr Uint32 OVERLAY_CHAR_WIDTH = 5;
-constexpr Uint32 OVERLAY_CHAR_HEIGHT = 7;
-constexpr Uint32 OVERLAY_CHAR_SPACING = 1;
-constexpr Uint32 OVERLAY_LINE_SPACING = 2;
-constexpr Uint32 OVERLAY_MARGIN = 8;
-constexpr float OVERLAY_TEXT_SCALE = 2.0f;
 constexpr size_t OVERLAY_MAX_DEBUG_MESSAGES = 8;
-constexpr Uint64 OVERLAY_MIN_VERTEX_CAPACITY = 4096;
-constexpr size_t OVERLAY_VERTEX_RESERVE_SIZE = 8192;
 constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
-constexpr int FPS_DISPLAY_PRECISION = 1;
-constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 32;
-constexpr float OVERLAY_CONSOLE_HEIGHT_RATIO = 0.4f;
+constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 512;
 constexpr size_t OVERLAY_MAX_CONSOLE_INPUT_LENGTH = 96;
 constexpr int CONSOLE_RESULT_PRECISION = 10;
 
-struct OverlayVertex {
-    glm::vec2 position;
-    glm::vec4 color;
-};
-
 struct OverlayState {
-    WGPUShaderModule shader = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
-    WGPUBuffer vertexBuffer = nullptr;
-    Uint64 vertexCapacity = 0;
     std::deque<std::string> debugMessages;
     std::deque<std::string> consoleLines;
     std::string consoleInput;
@@ -569,6 +551,7 @@ struct OverlayState {
     Uint64 fpsCounterStart = 0;
     Uint32 fpsFrameCount = 0;
     float currentFps = 0.0f;
+    std::unique_ptr<RmlUiOverlay> rmlOverlay;
 };
 
 OverlayState overlayState;
@@ -780,8 +763,6 @@ void ExecuteConsoleCommand(const std::string &commandLine)
         return;
     }
 
-    PushConsoleLine("CMD: " + trimmed);
-
     std::istringstream stream(trimmed);
     std::string command;
     stream >> command;
@@ -849,6 +830,16 @@ void ExecuteConsoleCommand(const std::string &commandLine)
         return;
     }
 
+    if (command == "help") {
+        PushConsoleLine("Available commands:");
+        PushConsoleLine("  print <message> - Prints a message to the console");
+        PushConsoleLine("  add <number1> <number2> - Adds two numbers and prints the result");
+        PushConsoleLine("  lua <script> - Executes a Lua script - eg. lua print(1 + 2)");
+        PushConsoleLine("  wren <script> - Executes a Wren script - eg. wren System.print(1 + 2)");
+        PushConsoleLine("  help - Displays this help message");
+        return;
+    }
+
     PushConsoleLine("Unknown command: " + command);
 }
 
@@ -860,11 +851,9 @@ void SetConsoleOpen(AppState &app, const bool open)
         app.mouseLookEnabled = false;
         SDL_SetRelativeMouseMode(SDL_FALSE);
         SDL_StartTextInput();
-        PushConsoleLine("Console opened");
         return;
     }
     SDL_StopTextInput();
-    PushConsoleLine("Console closed");
 }
 
 struct alignas(16) RotationUniform {
@@ -1495,215 +1484,23 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
     }
 }
 
-std::array<uint8_t, OVERLAY_CHAR_HEIGHT> GetGlyphRows(char c)
+void PrepareRmlOverlay(AppState &app)
 {
-    switch (const char upperChar = static_cast<char>(std::toupper(static_cast<unsigned char>(c)))) {
-        case 'A': return {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
-        case 'B': return {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E};
-        case 'C': return {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
-        case 'D': return {0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C};
-        case 'E': return {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F};
-        case 'F': return {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10};
-        case 'G': return {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F};
-        case 'H': return {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
-        case 'I': return {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F};
-        case 'J': return {0x1F, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C};
-        case 'K': return {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
-        case 'L': return {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F};
-        case 'M': return {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
-        case 'N': return {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11};
-        case 'O': return {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
-        case 'P': return {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
-        case 'Q': return {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D};
-        case 'R': return {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11};
-        case 'S': return {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E};
-        case 'T': return {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
-        case 'U': return {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
-        case 'V': return {0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04};
-        case 'W': return {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A};
-        case 'X': return {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11};
-        case 'Y': return {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04};
-        case 'Z': return {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F};
-        case '0': return {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E};
-        case '1': return {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E};
-        case '2': return {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F};
-        case '3': return {0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E};
-        case '4': return {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02};
-        case '5': return {0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E};
-        case '6': return {0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E};
-        case '7': return {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08};
-        case '8': return {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E};
-        case '9': return {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E};
-        case '.': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C};
-        case ':': return {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00};
-        case '-': return {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
-        case '_': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F};
-        case '/': return {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10};
-        case '\\': return {0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01};
-        case ',': return {0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x08};
-        case '(': return {0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02};
-        case ')': return {0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08};
-        case '[': return {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E};
-        case ']': return {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E};
-        case '!': return {0x04, 0x04, 0x04, 0x04, 0x00, 0x00, 0x04};
-        case ' ': return {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-        default: return {0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
-    }
-}
-
-void AppendOverlayQuad(std::vector<OverlayVertex> &vertices, const float x0, const float y0, const float x1, const float y1,
-                       const glm::vec4 &color, const float width, const float height)
-{
-    const float left = (x0 / width) * 2.0f - 1.0f;
-    const float right = (x1 / width) * 2.0f - 1.0f;
-    const float top = 1.0f - (y0 / height) * 2.0f;
-    const float bottom = 1.0f - (y1 / height) * 2.0f;
-
-    vertices.push_back({glm::vec2(left, top), color});
-    vertices.push_back({glm::vec2(right, top), color});
-    vertices.push_back({glm::vec2(right, bottom), color});
-    vertices.push_back({glm::vec2(left, top), color});
-    vertices.push_back({glm::vec2(right, bottom), color});
-    vertices.push_back({glm::vec2(left, bottom), color});
-}
-
-void AppendOverlayText(std::vector<OverlayVertex> &vertices, const std::string &text, const float x, const float y,
-                       const float scale, const glm::vec4 &color, const uint32_t screenWidth, const uint32_t screenHeight)
-{
-    float cursorX = x;
-    const float advance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * scale;
-    const float pixelSize = scale;
-    for (const char ch : text) {
-        const auto rows = GetGlyphRows(ch);
-        for (uint32_t row = 0; row < OVERLAY_CHAR_HEIGHT; ++row) {
-            for (uint32_t col = 0; col < OVERLAY_CHAR_WIDTH; ++col) {
-                const uint8_t mask = static_cast<uint8_t>(1u << (OVERLAY_CHAR_WIDTH - 1u - col));
-                if ((rows[row] & mask) == 0) {
-                    continue;
-                }
-                const float x0 = cursorX + static_cast<float>(col) * pixelSize;
-                const float y0 = y + static_cast<float>(row) * pixelSize;
-                const float x1 = x0 + pixelSize;
-                const float y1 = y0 + pixelSize;
-                AppendOverlayQuad(vertices, x0, y0, x1, y1, color, static_cast<float>(screenWidth), static_cast<float>(screenHeight));
-            }
-        }
-        cursorX += advance;
-    }
-}
-
-bool EnsureOverlayVertexBuffer(const AppState &app, const uint64_t requiredVertices)
-{
-    if (requiredVertices == 0) {
-        return true;
-    }
-    if (overlayState.vertexBuffer != nullptr && overlayState.vertexCapacity >= requiredVertices) {
-        return true;
-    }
-    if (overlayState.vertexBuffer != nullptr) {
-        wgpuBufferRelease(overlayState.vertexBuffer);
-        overlayState.vertexBuffer = nullptr;
-        overlayState.vertexCapacity = 0;
-    }
-    overlayState.vertexCapacity = std::max<uint64_t>(requiredVertices, OVERLAY_MIN_VERTEX_CAPACITY);
-    const WGPUBufferDescriptor descriptor{
-        .label = ToWgpuString("Debug Overlay Vertex Buffer"),
-        .usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst,
-        .size = overlayState.vertexCapacity * sizeof(OverlayVertex),
-    };
-    overlayState.vertexBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &descriptor);
-    return overlayState.vertexBuffer != nullptr;
-}
-
-bool CreateOverlayResources(const AppState &app, const WGPUShaderModule overlayShader)
-{
-    overlayState.shader = overlayShader;
-    if (!overlayState.shader) {
-        return false;
+    if (!overlayState.rmlOverlay) {
+        return;
     }
 
-    constexpr auto blendState = WGPUBlendState{
-        .color = WGPUBlendComponent{
-            .operation = WGPUBlendOperation_Add,
-            .srcFactor = WGPUBlendFactor_SrcAlpha,
-            .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
-        },
-        .alpha = WGPUBlendComponent{
-            .operation = WGPUBlendOperation_Add,
-            .srcFactor = WGPUBlendFactor_One,
-            .dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,
-        },
-    };
-    const auto colorTarget = WGPUColorTargetState{
-        .format = app.gpu.surfaceConfig.format,
-        .blend = &blendState,
-        .writeMask = WGPUColorWriteMask_All,
-    };
-    const auto fragmentState = WGPUFragmentState{
-        .module = overlayState.shader,
-        .entryPoint = ToWgpuString("fs_main"),
-        .targetCount = 1,
-        .targets = &colorTarget,
-    };
-    constexpr auto attributes = std::to_array<WGPUVertexAttribute>({
-        WGPUVertexAttribute{
-            .format = WGPUVertexFormat_Float32x2,
-            .offset = offsetof(OverlayVertex, position),
-            .shaderLocation = 0,
-        },
-        WGPUVertexAttribute{
-            .format = WGPUVertexFormat_Float32x4,
-            .offset = offsetof(OverlayVertex, color),
-            .shaderLocation = 1,
-        },
-    });
-    const auto vertexBufferLayout = WGPUVertexBufferLayout{
-        .stepMode = WGPUVertexStepMode_Vertex,
-        .arrayStride = sizeof(OverlayVertex),
-        .attributeCount = static_cast<uint32_t>(attributes.size()),
-        .attributes = attributes.data(),
-    };
-    const auto pipelineDesc = WGPURenderPipelineDescriptor{
-        .label = ToWgpuString("Debug Overlay Pipeline"),
-        .layout = nullptr,
-        .vertex = WGPUVertexState{
-            .module = overlayState.shader,
-            .entryPoint = ToWgpuString("vs_main"),
-            .bufferCount = 1,
-            .buffers = &vertexBufferLayout,
-        },
-        .primitive = WGPUPrimitiveState{
-            .topology = WGPUPrimitiveTopology_TriangleList,
-            .stripIndexFormat = WGPUIndexFormat_Undefined,
-            .frontFace = WGPUFrontFace_CCW,
-            .cullMode = WGPUCullMode_None,
-        },
-        .depthStencil = nullptr,
-        .multisample = WGPUMultisampleState{
-            .count = 1,
-            .mask = ~0u,
-        },
-        .fragment = &fragmentState,
-    };
-    overlayState.pipeline = wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
-    return overlayState.pipeline != nullptr;
-}
-
-void ReleaseOverlayResources()
-{
-    if (overlayState.vertexBuffer != nullptr) {
-        wgpuBufferRelease(overlayState.vertexBuffer);
-        overlayState.vertexBuffer = nullptr;
-        overlayState.vertexCapacity = 0;
-    }
-    if (overlayState.pipeline != nullptr) {
-        wgpuRenderPipelineRelease(overlayState.pipeline);
-        overlayState.pipeline = nullptr;
-    }
-    if (overlayState.shader != nullptr) {
-        wgpuShaderModuleRelease(overlayState.shader);
-        overlayState.shader = nullptr;
-    }
+    overlayState.rmlOverlay->SetDimensions(app.gpu.width, app.gpu.height);
+    overlayState.rmlOverlay->SetData(
+        overlayState.currentFps,
+        hoverDebugText,
+        characterDebugText,
+        overlayState.debugMessages,
+        overlayState.consoleLines,
+        overlayState.consoleOpen,
+        overlayState.consoleInput
+    );
+    overlayState.rmlOverlay->PrepareFrame();
 }
 
 void UpdateFpsCounter()
@@ -1712,6 +1509,7 @@ void UpdateFpsCounter()
     if (overlayState.fpsCounterStart == 0) {
         overlayState.fpsCounterStart = now;
     }
+
     overlayState.fpsFrameCount += 1;
     const auto elapsed = now - overlayState.fpsCounterStart;
     const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
@@ -1720,185 +1518,6 @@ void UpdateFpsCounter()
         overlayState.fpsFrameCount = 0;
         overlayState.fpsCounterStart = now;
     }
-}
-
-void RenderOverlay(AppState &app, WGPURenderPassEncoder pass)
-{
-    if (!overlayState.pipeline) {
-        return;
-    }
-
-    std::vector<OverlayVertex> vertices;
-    vertices.reserve(OVERLAY_VERTEX_RESERVE_SIZE);
-
-    std::ostringstream fpsStream;
-    fpsStream << std::fixed << std::setprecision(FPS_DISPLAY_PRECISION) << overlayState.currentFps;
-    const std::string fpsText = "FPS: " + fpsStream.str();
-    constexpr auto charAdvance = static_cast<float>(OVERLAY_CHAR_WIDTH + OVERLAY_CHAR_SPACING) * OVERLAY_TEXT_SCALE;
-    const auto fpsWidth = static_cast<float>(fpsText.size()) * charAdvance;
-    const auto fpsX = std::max(0.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN) - fpsWidth);
-    constexpr auto fpsY = static_cast<float>(OVERLAY_MARGIN);
-    AppendOverlayText(
-        vertices,
-        fpsText,
-        fpsX,
-        fpsY,
-        OVERLAY_TEXT_SCALE,
-        glm::vec4(0.9f, 0.95f, 0.2f, 1.0f),
-        app.gpu.width,
-        app.gpu.height
-    );
-
-    constexpr auto statusYStart = fpsY + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
-    AppendOverlayText(
-        vertices,
-        hoverDebugText,
-        static_cast<float>(OVERLAY_MARGIN),
-        statusYStart,
-        OVERLAY_TEXT_SCALE,
-        glm::vec4(0.85f, 0.95f, 0.85f, 1.0f),
-        app.gpu.width,
-        app.gpu.height
-    );
-    AppendOverlayText(
-        vertices,
-        characterDebugText,
-        static_cast<float>(OVERLAY_MARGIN),
-        statusYStart + static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING),
-        OVERLAY_TEXT_SCALE,
-        glm::vec4(0.95f, 0.85f, 0.85f, 1.0f),
-        app.gpu.width,
-        app.gpu.height
-    );
-
-    constexpr auto lineHeight = static_cast<float>(OVERLAY_CHAR_HEIGHT) * OVERLAY_TEXT_SCALE + static_cast<float>(OVERLAY_LINE_SPACING);
-    const auto usableWidth = static_cast<float>(std::max<int>(1, static_cast<int>(app.gpu.width) - static_cast<int>(OVERLAY_MARGIN * 2)));
-    const auto maxCharsPerLine = std::max(
-        1.0f,
-        usableWidth / charAdvance
-    );
-    std::vector<std::string> visibleMessages;
-    visibleMessages.reserve(overlayState.debugMessages.size());
-    for (const auto &message : overlayState.debugMessages) {
-        if (message.empty()) {
-            continue;
-        }
-        std::string line = message;
-        if (line.size() > static_cast<size_t>(maxCharsPerLine)) {
-            line.resize(static_cast<size_t>(maxCharsPerLine));
-        }
-        visibleMessages.push_back(std::move(line));
-    }
-
-    const auto debugStartY = std::max(
-        static_cast<float>(OVERLAY_MARGIN),
-        static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN) - lineHeight * static_cast<float>(visibleMessages.size())
-    );
-    for (size_t i = 0; i < visibleMessages.size(); ++i) {
-        AppendOverlayText(
-            vertices,
-            visibleMessages[i],
-            static_cast<float>(OVERLAY_MARGIN),
-            debugStartY + lineHeight * static_cast<float>(i),
-            OVERLAY_TEXT_SCALE,
-            glm::vec4(0.85f, 0.9f, 0.95f, 1.0f),
-            app.gpu.width,
-            app.gpu.height
-        );
-    }
-
-    if (overlayState.consoleOpen) {
-        constexpr auto panelX = static_cast<float>(OVERLAY_MARGIN);
-        constexpr auto panelY = static_cast<float>(OVERLAY_MARGIN);
-        const auto panelWidth = std::max(1.0f, static_cast<float>(app.gpu.width) - static_cast<float>(OVERLAY_MARGIN * 2));
-        const auto panelHeight = std::max(
-            lineHeight * 4.0f,
-            static_cast<float>(app.gpu.height) * OVERLAY_CONSOLE_HEIGHT_RATIO
-        );
-        const auto panelBottom = std::min(
-            static_cast<float>(app.gpu.height) - static_cast<float>(OVERLAY_MARGIN),
-            panelY + panelHeight
-        );
-        AppendOverlayQuad(
-            vertices,
-            panelX,
-            panelY,
-            panelX + panelWidth,
-            panelBottom,
-            glm::vec4(0.03f, 0.03f, 0.06f, 0.82f),
-            static_cast<float>(app.gpu.width),
-            static_cast<float>(app.gpu.height)
-        );
-
-        constexpr auto consoleTextX = panelX + static_cast<float>(OVERLAY_MARGIN);
-        constexpr auto consoleTitleY = panelY + static_cast<float>(OVERLAY_MARGIN);
-        const auto consoleInputY = panelBottom - static_cast<float>(OVERLAY_MARGIN) - lineHeight;
-        const auto textAreaHeight = std::max(0.0f, consoleInputY - (consoleTitleY + lineHeight));
-        const auto maxHistoryLines = std::max<size_t>(1, textAreaHeight / lineHeight);
-
-        AppendOverlayText(
-            vertices,
-            "Console",
-            consoleTextX,
-            consoleTitleY,
-            OVERLAY_TEXT_SCALE,
-            glm::vec4(0.9f, 0.95f, 1.0f, 1.0f),
-            app.gpu.width,
-            app.gpu.height
-        );
-
-        const auto linesToDraw = std::min(maxHistoryLines, overlayState.consoleLines.size());
-        const auto lineStart = overlayState.consoleLines.size() - linesToDraw;
-        const auto consoleTextWidth = std::max(1.0f, panelWidth - static_cast<float>(OVERLAY_MARGIN * 2));
-        const auto maxConsoleChars = std::max<size_t>(1, static_cast<size_t>(consoleTextWidth / charAdvance));
-        for (auto i = 0; i < linesToDraw; ++i) {
-            std::string line = overlayState.consoleLines[lineStart + i];
-            if (line.size() > maxConsoleChars) {
-                line.resize(maxConsoleChars);
-            }
-            AppendOverlayText(
-                vertices,
-                line,
-                consoleTextX,
-                consoleTitleY + lineHeight * static_cast<float>(i + 1),
-                OVERLAY_TEXT_SCALE,
-                glm::vec4(0.8f, 0.9f, 0.95f, 1.0f),
-                app.gpu.width,
-                app.gpu.height
-            );
-        }
-
-        std::string inputLine = "Input: " + overlayState.consoleInput + "_";
-        if (inputLine.size() > maxConsoleChars) {
-            if (const std::string marker = "Input: ..."; maxConsoleChars > marker.size()) {
-                const auto tailSize = maxConsoleChars - marker.size();
-                inputLine = marker + inputLine.substr(inputLine.size() - tailSize);
-            } else {
-                inputLine = inputLine.substr(0, maxConsoleChars);
-            }
-        }
-        AppendOverlayText(
-            vertices,
-            inputLine,
-            consoleTextX,
-            consoleInputY,
-            OVERLAY_TEXT_SCALE,
-            glm::vec4(0.95f, 0.95f, 0.95f, 1.0f),
-            app.gpu.width,
-            app.gpu.height
-        );
-    }
-
-    if (vertices.empty()) {
-        return;
-    }
-    if (!EnsureOverlayVertexBuffer(app, vertices.size())) {
-        return;
-    }
-    wgpuQueueWriteBuffer(app.gpu.queue, overlayState.vertexBuffer, 0, vertices.data(), vertices.size() * sizeof(OverlayVertex));
-    wgpuRenderPassEncoderSetPipeline(pass, overlayState.pipeline);
-    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, overlayState.vertexBuffer, 0, vertices.size() * sizeof(OverlayVertex));
-    wgpuRenderPassEncoderDraw(pass, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 }
 
 bool DrawFrame(AppState &app)
@@ -2078,7 +1697,10 @@ bool DrawFrame(AppState &app)
 #endif
 
     pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
-    RenderOverlay(app, pass);
+    PrepareRmlOverlay(app);
+    if (overlayState.rmlOverlay) {
+        overlayState.rmlOverlay->Render(pass);
+    }
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
@@ -2236,6 +1858,9 @@ void PumpEvents(AppState &app)
             app.running = false;
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             ConfigureSurface(app);
+            if (overlayState.rmlOverlay) {
+                overlayState.rmlOverlay->SetDimensions(app.gpu.width, app.gpu.height);
+            }
             PushDebugMessage("Surface reconfigured after window resize");
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             app.mouseLookEnabled = false;
@@ -2243,6 +1868,10 @@ void PumpEvents(AppState &app)
             PushDebugMessage("Mouse-look disabled due to focus loss");
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
             SetConsoleOpen(app, !overlayState.consoleOpen);
+        } else if (overlayState.consoleOpen
+            && overlayState.rmlOverlay
+            && overlayState.rmlOverlay->ProcessEvent(ev)) {
+            // Event consumed by RmlUi while console is open.
         } else if (overlayState.consoleOpen && ev.type == SDL_TEXTINPUT) {
             for (size_t i = 0; ev.text.text[i] != '\0'; ++i) {
                 const unsigned char ch = static_cast<unsigned char>(ev.text.text[i]);
@@ -2593,7 +2222,6 @@ int main()
 
     if (!InitializeGraphics(app)) {
         PushDebugMessage("Failed to initialize WebGPU", true);
-        ReleaseOverlayResources();
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
@@ -2603,16 +2231,16 @@ int main()
 
     shaders["forwardShader"] = createShaderModule(app.gpu.device, "assets/shaders/forward_renderer.wgsl");
     shaders["shadowCaster"] = createShaderModule(app.gpu.device, "assets/shaders/shadow_caster.wgsl");
-    shaders["overlayShader"] = createShaderModule(app.gpu.device, "assets/shaders/overlay_shader.wgsl");
-    if (!CreateOverlayResources(app, shaders["overlayShader"])) {
-        PushDebugMessage("Failed to create debug text overlay resources", true);
-        ReleaseOverlayResources();
+    overlayState.rmlOverlay = std::make_unique<RmlUiOverlay>();
+    if (!overlayState.rmlOverlay->Initialize(app.gpu.device, app.gpu.queue, app.gpu.surfaceConfig.format, app.gpu.width, app.gpu.height)) {
+        PushDebugMessage("Failed to initialize RmlUi overlay", true);
+        overlayState.rmlOverlay.reset();
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 1;
     }
-    PushDebugMessage("Debug text overlay initialized");
+    PushDebugMessage("RmlUi overlay initialized");
 
     AssetManager assetManager(app.gpu.device, app.gpu.queue);
 
@@ -2861,7 +2489,10 @@ int main()
     const auto sampleTexture = assetManager.RequestTexture("sample.png", sampleTextureError);
     if (!sampleTexture) {
         PushDebugMessage("Failed to load default texture sample.png: " + sampleTextureError, true);
-        ReleaseOverlayResources();
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
         return 1;
     }
 
@@ -3066,7 +2697,10 @@ int main()
 
     if (!InitializeScripting()) {
         PushDebugMessage("Failed to initialize scripting runtimes", true);
-        ReleaseOverlayResources();
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
@@ -3107,7 +2741,10 @@ int main()
     }
 
     ShutdownScripting();
-    ReleaseOverlayResources();
+    if (overlayState.rmlOverlay) {
+        overlayState.rmlOverlay->Shutdown();
+        overlayState.rmlOverlay.reset();
+    }
     ReleaseGpu(app.gpu);
     audioManager.Shutdown();
     SDL_DestroyWindow(app.window);

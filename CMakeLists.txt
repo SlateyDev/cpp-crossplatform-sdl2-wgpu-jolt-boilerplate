@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+endif()
+
 include(FetchContent)
 
 option(ABERRANT_USE_SYSTEM_DEPS "Use pre-installed webgpu/Jolt instead of FetchContent" OFF)
@@ -111,8 +115,38 @@ target_compile_definitions(wren_static PUBLIC WREN_STATIC)
 
 target_link_libraries(aberrant_engine PRIVATE lua_static wren_static)
 
+set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)
+set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
+set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "" FORCE)
+
+set(FT_DISABLE_ZLIB TRUE CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 TRUE CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG TRUE CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ TRUE CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI TRUE CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG VER-2-13-3
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(freetype)
+if(TARGET freetype AND NOT TARGET Freetype::Freetype)
+    add_library(Freetype::Freetype ALIAS freetype)
+endif()
+
+FetchContent_Declare(
+    RmlUi
+    GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
+    GIT_TAG 6.2
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(RmlUi)
+
+target_link_libraries(aberrant_engine PRIVATE RmlUi::Core RmlUi::Debugger)
+
 if(MSVC)
-    foreach(target_name aberrant_engine lua_static wren_static)
+    foreach(target_name aberrant_engine lua_static wren_static rmlui_core rmlui_debugger freetype)
         if(TARGET ${target_name})
             set_property(TARGET ${target_name} PROPERTY
                 MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
