@@ -17,6 +17,10 @@ struct UnlitMaterial {
     WGPUTextureView baseColorTextureView;
     WGPUTexture metallicRoughnessTexture;
     WGPUTextureView metallicRoughnessTextureView;
+    WGPUTexture normalTexture;
+    WGPUTextureView normalTextureView;
+    WGPUTexture emissiveTexture;
+    WGPUTextureView emissiveTextureView;
     WGPUBuffer pbrParamsBuffer;
     WGPUBindGroup bindGroup;
 };

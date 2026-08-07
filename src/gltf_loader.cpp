@@ -12,6 +12,8 @@
 
 namespace {
 
+constexpr const char *kFallbackMaterialKey = "sample.png";
+
 const char *CgltfResultToString(const cgltf_result result)
 {
     switch (result) {
@@ -114,7 +116,7 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
 std::string GetMaterialKey(const cgltf_material *material, const cgltf_data *data)
 {
     if (material == nullptr) {
-        return "sample.png";
+        return kFallbackMaterialKey;
     }
     if (material->name != nullptr && material->name[0] != '\0') {
         return material->name;
@@ -154,6 +156,20 @@ bool LoadGltfPrimitives(
     }
 
     std::vector<Primitive> parsedPrimitives;
+    std::unordered_map<std::string, UnlitMaterial> parsedMaterials;
+    const auto releaseParsedMaterials = [&parsedMaterials]() {
+        for (auto &[_, parsedMaterial] : parsedMaterials) {
+            if (parsedMaterial.bindGroup != nullptr) {
+                wgpuBindGroupRelease(parsedMaterial.bindGroup);
+                parsedMaterial.bindGroup = nullptr;
+            }
+            if (parsedMaterial.pbrParamsBuffer != nullptr) {
+                wgpuBufferRelease(parsedMaterial.pbrParamsBuffer);
+                parsedMaterial.pbrParamsBuffer = nullptr;
+            }
+        }
+        parsedMaterials.clear();
+    };
 
     for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; ++meshIndex) {
         const cgltf_mesh &mesh = data->meshes[meshIndex];
@@ -239,7 +255,7 @@ bool LoadGltfPrimitives(
     }
 
     std::string fallbackTextureError;
-    const auto *fallbackTexture = assetManager.RequestTexture("sample.png", fallbackTextureError);
+    const auto *fallbackTexture = assetManager.RequestTexture(kFallbackMaterialKey, fallbackTextureError);
     if (fallbackTexture == nullptr) {
         outError = fallbackTextureError.empty() ? "Failed to load fallback texture sample.png." : fallbackTextureError;
         cgltf_free(data);
@@ -254,6 +270,7 @@ bool LoadGltfPrimitives(
             const auto *image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             if (image == nullptr || image->uri == nullptr) {
                 outError = "Material base color texture is missing image URI.";
+                releaseParsedMaterials();
                 cgltf_free(data);
                 return false;
             }
@@ -261,6 +278,7 @@ bool LoadGltfPrimitives(
             const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
             if (!materialTexture) {
                 outError = textureLoadError.empty() ? "Failed to load material texture." : textureLoadError;
+                releaseParsedMaterials();
                 cgltf_free(data);
                 return false;
             }
@@ -275,6 +293,7 @@ bool LoadGltfPrimitives(
             const auto *image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
             if (image == nullptr || image->uri == nullptr) {
                 outError = "Material metallic-roughness texture is missing image URI.";
+                releaseParsedMaterials();
                 cgltf_free(data);
                 return false;
             }
@@ -282,6 +301,7 @@ bool LoadGltfPrimitives(
             const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
             if (!materialTexture) {
                 outError = textureLoadError.empty() ? "Failed to load metallic-roughness texture." : textureLoadError;
+                releaseParsedMaterials();
                 cgltf_free(data);
                 return false;
             }
@@ -290,10 +310,60 @@ bool LoadGltfPrimitives(
             hasMetallicRoughnessTexture = true;
         }
 
+        WGPUTexture normalTexture = fallbackTexture->getTexture();
+        WGPUTextureView normalTextureView = fallbackTexture->getTextureView();
+        bool hasNormalTexture = false;
+        if (material.normal_texture.texture != nullptr) {
+            const auto *image = material.normal_texture.texture->image;
+            if (image == nullptr || image->uri == nullptr) {
+                outError = "Material normal texture is missing image URI.";
+                releaseParsedMaterials();
+                cgltf_free(data);
+                return false;
+            }
+            std::string textureLoadError;
+            const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
+            if (!materialTexture) {
+                outError = textureLoadError.empty() ? "Failed to load normal texture." : textureLoadError;
+                releaseParsedMaterials();
+                cgltf_free(data);
+                return false;
+            }
+            normalTexture = materialTexture->getTexture();
+            normalTextureView = materialTexture->getTextureView();
+            hasNormalTexture = true;
+        }
+
+        WGPUTexture emissiveTexture = fallbackTexture->getTexture();
+        WGPUTextureView emissiveTextureView = fallbackTexture->getTextureView();
+        bool hasEmissiveTexture = false;
+        if (material.emissive_texture.texture != nullptr) {
+            const auto *image = material.emissive_texture.texture->image;
+            if (image == nullptr || image->uri == nullptr) {
+                outError = "Material emissive texture is missing image URI.";
+                releaseParsedMaterials();
+                cgltf_free(data);
+                return false;
+            }
+            std::string textureLoadError;
+            const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
+            if (!materialTexture) {
+                outError = textureLoadError.empty() ? "Failed to load emissive texture." : textureLoadError;
+                releaseParsedMaterials();
+                cgltf_free(data);
+                return false;
+            }
+            emissiveTexture = materialTexture->getTexture();
+            emissiveTextureView = materialTexture->getTextureView();
+            hasEmissiveTexture = true;
+        }
+
         const float occlusionStrength = material.occlusion_texture.texture == nullptr ? 1.0f : material.occlusion_texture.scale;
         const auto flags = static_cast<float>(
             (material.alpha_mode == cgltf_alpha_mode_mask ? 1u : 0u) |
-            (hasMetallicRoughnessTexture ? 2u : 0u)
+            (hasMetallicRoughnessTexture ? 2u : 0u) |
+            (hasNormalTexture ? 4u : 0u) |
+            (hasEmissiveTexture ? 8u : 0u)
         );
         const PbrMaterialUniform pbrMaterialUniform{
             .baseColorFactor = glm::vec4(
@@ -324,6 +394,7 @@ bool LoadGltfPrimitives(
         const auto pbrParamsBuffer = wgpuDeviceCreateBuffer(gpuState.device, &pbrParamsBufferDesc);
         if (pbrParamsBuffer == nullptr) {
             outError = "Failed to create PBR material uniform buffer.";
+            releaseParsedMaterials();
             cgltf_free(data);
             return false;
         }
@@ -333,8 +404,10 @@ bool LoadGltfPrimitives(
             WGPUBindGroupEntry{.binding = 0, .textureView = baseColorTextureView},
             WGPUBindGroupEntry{.binding = 1, .sampler = gpuState.defaultSampler},
             WGPUBindGroupEntry{.binding = 2, .textureView = metallicRoughnessTextureView},
+            WGPUBindGroupEntry{.binding = 3, .textureView = normalTextureView},
+            WGPUBindGroupEntry{.binding = 4, .textureView = emissiveTextureView},
             WGPUBindGroupEntry{
-                .binding = 3,
+                .binding = 5,
                 .buffer = pbrParamsBuffer,
                 .size = sizeof(PbrMaterialUniform),
             },
@@ -349,15 +422,21 @@ bool LoadGltfPrimitives(
         const auto newBindGroup = wgpuDeviceCreateBindGroup(gpuState.device, &bindGroupDesc);
         if (newBindGroup == nullptr) {
             outError = "Failed to create material bind group.";
+            wgpuBufferRelease(pbrParamsBuffer);
+            releaseParsedMaterials();
             cgltf_free(data);
             return false;
         }
 
-        materials[GetMaterialKey(&material, data)] = UnlitMaterial{
+        parsedMaterials[GetMaterialKey(&material, data)] = UnlitMaterial{
             .baseColorTexture = baseColorTexture,
             .baseColorTextureView = baseColorTextureView,
             .metallicRoughnessTexture = metallicRoughnessTexture,
             .metallicRoughnessTextureView = metallicRoughnessTextureView,
+            .normalTexture = normalTexture,
+            .normalTextureView = normalTextureView,
+            .emissiveTexture = emissiveTexture,
+            .emissiveTextureView = emissiveTextureView,
             .pbrParamsBuffer = pbrParamsBuffer,
             .bindGroup = newBindGroup,
         };
@@ -366,8 +445,13 @@ bool LoadGltfPrimitives(
     cgltf_free(data);
 
     if (parsedPrimitives.empty()) {
+        releaseParsedMaterials();
         outError = "No triangle primitives found in glTF file.";
         return false;
+    }
+
+    for (auto &[materialName, parsedMaterial] : parsedMaterials) {
+        materials[materialName] = std::move(parsedMaterial);
     }
 
     outPrimitives = std::move(parsedPrimitives);

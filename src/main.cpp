@@ -1,7 +1,17 @@
+#include <ranges>
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #if defined(__EMSCRIPTEN__)
@@ -20,14 +30,29 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
+
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+}
+
+#ifndef WREN_STATIC
+#define WREN_STATIC
+#endif
+extern "C" {
+#include <wren.h>
+}
 
 #include <atomic>
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdarg>
-#include <cstdio>
+#include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -35,17 +60,24 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 #include "mesh_instance.hpp"
 #include "gltf_loader.hpp"
+#include "navmesh_runtime.hpp"
 #include "primitive.hpp"
+#include "rmlui_overlay.hpp"
 #include "structures.hpp"
 
 #include "Engine/GameObject.hpp"
 #include "Engine/AssetManager.hpp"
+#include "Engine/AudioManager.hpp"
 #include "Engine/EngineTexture.hpp"
 
 namespace {
+
+constexpr glm::vec3 PLANE_COLLIDER_HALF_EXTENTS = glm::vec3(20.0f, 0.5f, 20.0f);
+constexpr glm::vec3 BOX_COLLIDER_HALF_EXTENTS = glm::vec3(0.5f, 0.5f, 0.5f);
 
 void TraceImpl(const char *inFormat, ...)
 {
@@ -88,8 +120,172 @@ public:
             std::max(1u, std::thread::hardware_concurrency() - 1)
         );
 
+        broadPhaseLayerInterface = std::make_unique<BroadPhaseLayerInterfaceImpl>();
+        objectVsBroadPhaseLayerFilter = std::make_unique<ObjectVsBroadPhaseLayerFilterImpl>();
+        objectLayerPairFilter = std::make_unique<ObjectLayerPairFilterImpl>();
+        physicsSystem = std::make_unique<JPH::PhysicsSystem>();
+        physicsSystem->Init(
+            cMaxBodies,
+            cNumBodyMutexes,
+            cMaxBodyPairs,
+            cMaxContactConstraints,
+            *broadPhaseLayerInterface,
+            *objectVsBroadPhaseLayerFilter,
+            *objectLayerPairFilter
+        );
+        physicsSystem->SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
+
         initialized = true;
         return true;
+    }
+
+    bool CreateScene(const glm::vec3 &planePosition, const glm::vec3 &boxPosition, const glm::vec3 &box1Position, const glm::vec3 &characterPosition)
+    {
+        if (!initialized || !physicsSystem) {
+            return false;
+        }
+
+        auto &bodyInterface = physicsSystem->GetBodyInterface();
+
+        const JPH::RefConst<JPH::Shape> planeShape = new JPH::BoxShape(ToVec3(PLANE_COLLIDER_HALF_EXTENTS));
+        const JPH::BodyCreationSettings planeSettings(
+            planeShape,
+            ToRVec3(glm::vec3(planePosition.x, planePosition.y - 0.5f, planePosition.z)),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        planeBodyId = bodyInterface.CreateAndAddBody(planeSettings, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> boxShape = new JPH::BoxShape(ToVec3(BOX_COLLIDER_HALF_EXTENTS));
+        const JPH::BodyCreationSettings boxSettings(
+            boxShape,
+            ToRVec3(boxPosition),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        boxBodyId = bodyInterface.CreateAndAddBody(boxSettings, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> boxShape1 = new JPH::BoxShape(ToVec3(BOX_COLLIDER_HALF_EXTENTS));
+        const JPH::BodyCreationSettings boxSettings1(
+            boxShape1,
+            ToRVec3(box1Position),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Static,
+            Layers::NON_MOVING
+        );
+        boxBody1Id = bodyInterface.CreateAndAddBody(boxSettings1, JPH::EActivation::DontActivate);
+
+        const JPH::RefConst<JPH::Shape> characterShape = new JPH::CapsuleShape(0.6f, 0.3f);
+        JPH::BodyCreationSettings characterSettings(
+            characterShape,
+            ToRVec3(characterPosition),
+            JPH::Quat::sIdentity(),
+            JPH::EMotionType::Dynamic,
+            Layers::MOVING
+        );
+        characterSettings.mFriction = 0.0f;
+        characterSettings.mLinearDamping = 0.12f;
+        characterSettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+        characterBodyId = bodyInterface.CreateAndAddBody(characterSettings, JPH::EActivation::Activate);
+        sceneCreated = !planeBodyId.IsInvalid() && !boxBodyId.IsInvalid() && !boxBody1Id.IsInvalid() && !characterBodyId.IsInvalid();
+        return sceneCreated;
+    }
+
+    void ApplyCharacterInput(const Uint8 *keyboardState)
+    {
+        if (!sceneCreated || !physicsSystem || characterBodyId.IsInvalid()) {
+            return;
+        }
+
+        glm::vec2 moveInput(0.0f);
+        if (keyboardState[SDL_SCANCODE_LEFT]) {
+            moveInput.x -= 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_RIGHT]) {
+            moveInput.x += 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_UP]) {
+            moveInput.y -= 1.0f;
+        }
+        if (keyboardState[SDL_SCANCODE_DOWN]) {
+            moveInput.y += 1.0f;
+        }
+        if (glm::length(moveInput) > 1.0f) {
+            moveInput = glm::normalize(moveInput);
+        }
+
+        constexpr auto moveSpeed = 4.0f;
+        auto &bodyInterface = physicsSystem->GetBodyInterface();
+        const auto currentVelocity = bodyInterface.GetLinearVelocity(characterBodyId);
+        const JPH::Vec3 targetVelocity(moveInput.x * moveSpeed, currentVelocity.GetY(), moveInput.y * moveSpeed);
+        bodyInterface.SetLinearVelocity(characterBodyId, targetVelocity);
+
+        const auto jumpHeldNow = keyboardState[SDL_SCANCODE_SPACE] != 0;
+        if (jumpHeldNow && !jumpHeld && IsCharacterGrounded()) {
+            bodyInterface.AddImpulse(characterBodyId, JPH::Vec3(0.0f, 4500.0f, 0.0f));
+        }
+        jumpHeld = jumpHeldNow;
+    }
+
+    void StepSimulation(const float deltaSeconds) const
+    {
+        if (!sceneCreated || !physicsSystem || !tempAllocator || !jobSystem) {
+            return;
+        }
+        constexpr int collisionSteps = 1;
+        physicsSystem->Update(deltaSeconds, collisionSteps, tempAllocator.get(), jobSystem.get());
+    }
+
+    void SyncScene(MeshInstance &boxObject, MeshInstance &characterObject) const
+    {
+        if (!sceneCreated || !physicsSystem) {
+            return;
+        }
+
+        const auto &bodyInterface = physicsSystem->GetBodyInterface();
+        if (!boxBodyId.IsInvalid()) {
+            const JPH::RVec3 position = bodyInterface.GetCenterOfMassPosition(boxBodyId);
+            boxObject.translation = glm::vec3(static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ()));
+        }
+
+        if (!characterBodyId.IsInvalid()) {
+            const JPH::RVec3 position = bodyInterface.GetCenterOfMassPosition(characterBodyId);
+            characterObject.translation = glm::vec3(static_cast<float>(position.GetX()), static_cast<float>(position.GetY()), static_cast<float>(position.GetZ()));
+            characterObject.rotation = glm::identity<glm::quat>();
+        }
+    }
+
+    std::string GetHoveredObjectName(const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, const float maxDistance) const
+    {
+        if (!sceneCreated || !physicsSystem) {
+            return {};
+        }
+
+        const JPH::RRayCast ray(ToRVec3(rayOrigin), ToVec3(rayDirection * maxDistance));
+        JPH::RayCastResult hitResult;
+        if (!physicsSystem->GetNarrowPhaseQuery().CastRay(ray, hitResult)) {
+            return {};
+        }
+        if (hitResult.mBodyID == characterBodyId) {
+            return "Character";
+        }
+        if (hitResult.mBodyID == planeBodyId) {
+            return "Plane";
+        }
+        if (hitResult.mBodyID == boxBodyId) {
+            return "Box";
+        }
+        if (hitResult.mBodyID == boxBody1Id) {
+            return "Box1";
+        }
+        return {};
+    }
+
+    bool IsCharacterGroundedPublic() const
+    {
+        return IsCharacterGrounded();
     }
 
     ~JoltRuntime()
@@ -97,6 +293,19 @@ public:
         if (!initialized) {
             return;
         }
+
+        if (physicsSystem) {
+            auto &bodyInterface = physicsSystem->GetBodyInterface();
+            DestroyBodyIfValid(bodyInterface, characterBodyId);
+            DestroyBodyIfValid(bodyInterface, boxBodyId);
+            DestroyBodyIfValid(bodyInterface, boxBody1Id);
+            DestroyBodyIfValid(bodyInterface, planeBodyId);
+        }
+
+        physicsSystem.reset();
+        objectLayerPairFilter.reset();
+        objectVsBroadPhaseLayerFilter.reset();
+        broadPhaseLayerInterface.reset();
 
         jobSystem.reset();
         tempAllocator.reset();
@@ -107,9 +316,132 @@ public:
     }
 
 private:
+    static constexpr JPH::uint cMaxBodies = 1024;
+    static constexpr JPH::uint cNumBodyMutexes = 0;
+    static constexpr JPH::uint cMaxBodyPairs = 1024;
+    static constexpr JPH::uint cMaxContactConstraints = 1024;
+
+    struct Layers {
+        static constexpr JPH::ObjectLayer NON_MOVING = 0;
+        static constexpr JPH::ObjectLayer MOVING = 1;
+        static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+    };
+
+    struct BroadPhaseLayers {
+        static constexpr JPH::BroadPhaseLayer NON_MOVING{0};
+        static constexpr JPH::BroadPhaseLayer MOVING{1};
+        static constexpr JPH::uint NUM_LAYERS = 2;
+    };
+
+    class BroadPhaseLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface {
+    public:
+        BroadPhaseLayerInterfaceImpl()
+        {
+            objectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
+            objectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
+        }
+
+        [[nodiscard]] JPH::uint GetNumBroadPhaseLayers() const override
+        {
+            return BroadPhaseLayers::NUM_LAYERS;
+        }
+
+        [[nodiscard]] JPH::BroadPhaseLayer GetBroadPhaseLayer(const JPH::ObjectLayer layer) const override
+        {
+            return objectToBroadPhase[layer];
+        }
+
+        [[nodiscard]] const char *GetBroadPhaseLayerName(const JPH::BroadPhaseLayer layer) const
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+            override
+#endif
+        {
+            if (layer == BroadPhaseLayers::NON_MOVING) {
+                return "NON_MOVING";
+            }
+            if (layer == BroadPhaseLayers::MOVING) {
+                return "MOVING";
+            }
+            return "UNKNOWN";
+        }
+
+    private:
+        JPH::BroadPhaseLayer objectToBroadPhase[Layers::NUM_LAYERS];
+    };
+
+    class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
+    public:
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer layer1, const JPH::ObjectLayer layer2) const override
+        {
+            if (layer1 == Layers::NON_MOVING && layer2 == Layers::NON_MOVING) {
+                return false;
+            }
+            return true;
+        }
+    };
+
+    class ObjectVsBroadPhaseLayerFilterImpl final : public JPH::ObjectVsBroadPhaseLayerFilter {
+    public:
+        [[nodiscard]] bool ShouldCollide(const JPH::ObjectLayer layer1, const JPH::BroadPhaseLayer layer2) const override
+        {
+            if (layer1 == Layers::NON_MOVING) {
+                return layer2 == BroadPhaseLayers::MOVING;
+            }
+            if (layer1 == Layers::MOVING) {
+                return true;
+            }
+            return false;
+        }
+    };
+
+    static JPH::RVec3 ToRVec3(const glm::vec3 &value)
+    {
+        return JPH::RVec3(value.x, value.y, value.z);
+    }
+
+    static JPH::Vec3 ToVec3(const glm::vec3 &value)
+    {
+        return JPH::Vec3(value.x, value.y, value.z);
+    }
+
+    bool IsCharacterGrounded() const
+    {
+        if (!sceneCreated || !physicsSystem || characterBodyId.IsInvalid()) {
+            return false;
+        }
+        const auto &bodyInterface = physicsSystem->GetBodyInterface();
+        const auto characterPosition = bodyInterface.GetCenterOfMassPosition(characterBodyId);
+        const JPH::RRayCast downRay(characterPosition, JPH::Vec3(0.0f, -1.0f, 0.0f));
+        const JPH::IgnoreSingleBodyFilter ignoreCharacterFilter(characterBodyId);
+        if (JPH::RayCastResult hitResult; !physicsSystem->GetNarrowPhaseQuery().CastRay(downRay, hitResult, {}, {}, ignoreCharacterFilter)) {
+            return false;
+        }
+        return true;
+    }
+
+    static void DestroyBodyIfValid(JPH::BodyInterface &bodyInterface, JPH::BodyID &bodyId)
+    {
+        if (bodyId.IsInvalid()) {
+            return;
+        }
+        bodyInterface.RemoveBody(bodyId);
+        bodyInterface.DestroyBody(bodyId);
+        bodyId = JPH::BodyID();
+    }
+
     bool initialized = false;
+    bool sceneCreated = false;
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
+    std::unique_ptr<BroadPhaseLayerInterfaceImpl> broadPhaseLayerInterface;
+    std::unique_ptr<ObjectVsBroadPhaseLayerFilterImpl> objectVsBroadPhaseLayerFilter;
+    std::unique_ptr<ObjectLayerPairFilterImpl> objectLayerPairFilter;
+    std::unique_ptr<JPH::PhysicsSystem> physicsSystem;
+    JPH::BodyID planeBodyId;
+    JPH::BodyID boxBodyId;
+    JPH::BodyID boxBody1Id;
+    JPH::BodyID characterBodyId;
+    bool jumpHeld = false;
 };
 
 struct alignas(16) ModelMatrixUniform {
@@ -162,6 +494,18 @@ std::vector<MeshInstance*> objects;
 MeshInstance gameObject1;
 MeshInstance gameObject2;
 MeshInstance gameObject3;
+MeshInstance gameObject4;
+MeshInstance capsuleCharacterObject;
+std::vector<MeshInstance> navMeshDebugVertexObjects;
+std::vector<MeshInstance> navMeshDebugEdgeObjects;
+std::vector<MeshInstance> navPathDebugPointObjects;
+std::vector<MeshInstance> navPathDebugSegmentObjects;
+
+AudioManager audioManager;
+constexpr auto DEFAULT_SFX_NAME = "default_sfx";
+constexpr auto DEFAULT_MUSIC_NAME = "default_music";
+constexpr auto DEFAULT_SFX_PATH = "assets/audio/sfx.wav";
+constexpr auto DEFAULT_MUSIC_PATH = "assets/audio/music.ogg";
 
 constexpr WGPUTextureFormat DEPTH_FORMAT = WGPUTextureFormat_Depth32Float;
 
@@ -220,6 +564,540 @@ struct FlyCamera : public Camera {
 
 FlyCamera flyCamera;
 
+constexpr size_t OVERLAY_MAX_DEBUG_MESSAGES = 8;
+constexpr double FPS_UPDATE_INTERVAL_SECONDS = 0.25;
+constexpr size_t OVERLAY_MAX_CONSOLE_LINES = 512;
+constexpr size_t OVERLAY_MAX_CONSOLE_INPUT_LENGTH = 96;
+constexpr int CONSOLE_RESULT_PRECISION = 10;
+
+struct OverlayState {
+    std::deque<std::string> debugMessages;
+    std::deque<std::string> consoleLines;
+    std::string consoleInput;
+    bool consoleOpen = false;
+    Uint64 fpsCounterStart = 0;
+    Uint32 fpsFrameCount = 0;
+    float currentFps = 0.0f;
+    std::unique_ptr<RmlUiOverlay> rmlOverlay;
+};
+
+OverlayState overlayState;
+std::string hoverDebugText = "Hover: None";
+std::string characterDebugText = "Character: Airborne";
+std::string navMeshDebugText = "NavMesh: Not initialized";
+
+constexpr size_t NAV_PATH_DEBUG_MAX_POINTS = 64;
+constexpr float NAVMESH_DEBUG_HEIGHT_OFFSET = 0.06f;
+constexpr float NAVMESH_DEBUG_VERTEX_MARKER_SCALE = 0.2f;
+constexpr float NAVMESH_DEBUG_EDGE_THICKNESS = 0.08f;
+constexpr float NAV_PATH_DEBUG_POINT_MARKER_SCALE = 0.18f;
+constexpr float NAV_PATH_DEBUG_SEGMENT_THICKNESS = 0.1f;
+
+void AppendPlaneTopNavGeometry(const glm::vec3 &planePosition, const glm::vec3 &halfExtents, std::vector<float> &outVertices, std::vector<int> &outIndices)
+{
+    const int vertexOffset = static_cast<int>(outVertices.size() / 3);
+    const float y = planePosition.y;
+
+    outVertices.insert(outVertices.end(), {
+        planePosition.x - halfExtents.x, y, planePosition.z - halfExtents.z,
+        planePosition.x + halfExtents.x, y, planePosition.z - halfExtents.z,
+        planePosition.x + halfExtents.x, y, planePosition.z + halfExtents.z,
+        planePosition.x - halfExtents.x, y, planePosition.z + halfExtents.z
+    });
+
+    outIndices.insert(outIndices.end(), {
+        vertexOffset + 0, vertexOffset + 2, vertexOffset + 1,
+        vertexOffset + 0, vertexOffset + 3, vertexOffset + 2
+    });
+}
+
+void AppendBoxNavGeometry(const glm::vec3 &boxCenter, const glm::vec3 &halfExtents, std::vector<float> &outVertices, std::vector<int> &outIndices)
+{
+    const int vertexOffset = static_cast<int>(outVertices.size() / 3);
+    const glm::vec3 scale = halfExtents * 2.0f;
+
+    outVertices.reserve(outVertices.size() + (boxVertices.size() * 3));
+    for (const auto &vertex : boxVertices) {
+        const glm::vec3 worldPosition = boxCenter + (vertex.position * scale);
+        outVertices.push_back(worldPosition.x);
+        outVertices.push_back(worldPosition.y);
+        outVertices.push_back(worldPosition.z);
+    }
+
+    outIndices.reserve(outIndices.size() + boxIndices.size());
+    for (const int index : boxIndices) {
+        outIndices.push_back(vertexOffset + index);
+    }
+}
+
+void BuildNavMeshSourceGeometry(
+    const glm::vec3 &planePosition,
+    const glm::vec3 &boxPositionA,
+    const glm::vec3 &boxPositionB,
+    std::vector<float> &outVertices,
+    std::vector<int> &outIndices)
+{
+    outVertices.clear();
+    outIndices.clear();
+    outVertices.reserve((4 + (boxVertices.size() * 2)) * 3);
+    outIndices.reserve(6 + (boxIndices.size() * 2));
+
+    AppendPlaneTopNavGeometry(planePosition, PLANE_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+    AppendBoxNavGeometry(boxPositionA, BOX_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+    AppendBoxNavGeometry(boxPositionB, BOX_COLLIDER_HALF_EXTENTS, outVertices, outIndices);
+}
+
+MeshInstance CreateDebugCubeObject(const std::string &name)
+{
+    MeshInstance instance;
+    instance.meshName = "cube";
+    instance.translation = glm::vec3(0.0f);
+    instance.rotation = glm::identity<glm::quat>();
+    instance.scale = glm::vec3(0.0f);
+    (void)name;
+    return instance;
+}
+
+void HideDebugObject(MeshInstance &object)
+{
+    object.scale = glm::vec3(0.0f);
+}
+
+void PlaceDebugPoint(MeshInstance &object, const glm::vec3 &position, const float scale, const float yOffset)
+{
+    object.translation = position + glm::vec3(0.0f, yOffset, 0.0f);
+    object.rotation = glm::identity<glm::quat>();
+    object.scale = glm::vec3(scale);
+}
+
+void PlaceDebugSegment(MeshInstance &object, const glm::vec3 &start, const glm::vec3 &end, const float thickness, const float yOffset)
+{
+    const glm::vec3 segment = end - start;
+    const float length = glm::length(segment);
+    if (length <= 0.0001f) {
+        HideDebugObject(object);
+        return;
+    }
+
+    const glm::vec3 direction = segment / length;
+    const glm::vec3 midpoint = (start + end) * 0.5f + glm::vec3(0.0f, yOffset, 0.0f);
+
+    // Cube forward axis is +Z, rotate that to the segment direction.
+    const glm::quat rotation = glm::rotation(glm::vec3(0.0f, 0.0f, 1.0f), direction);
+    object.translation = midpoint;
+    object.rotation = rotation;
+    object.scale = glm::vec3(thickness, thickness, length);
+}
+
+void InitializeNavDebugObjects(const std::vector<float> &navMeshVertices, const std::vector<int> &navMeshIndices)
+{
+    navMeshDebugVertexObjects.clear();
+    navMeshDebugEdgeObjects.clear();
+    navPathDebugPointObjects.clear();
+    navPathDebugSegmentObjects.clear();
+
+    const size_t navVertexCount = navMeshVertices.size() / 3;
+    navMeshDebugVertexObjects.reserve(navVertexCount);
+    for (size_t index = 0; index < navVertexCount; ++index) {
+        const size_t base = index * 3;
+        auto object = CreateDebugCubeObject("navmesh-vertex");
+        PlaceDebugPoint(
+            object,
+            glm::vec3(navMeshVertices[base], navMeshVertices[base + 1], navMeshVertices[base + 2]),
+            NAVMESH_DEBUG_VERTEX_MARKER_SCALE,
+            NAVMESH_DEBUG_HEIGHT_OFFSET
+        );
+        navMeshDebugVertexObjects.push_back(object);
+    }
+
+    std::vector<std::pair<int, int>> navEdges;
+    navEdges.reserve(navMeshIndices.size());
+    std::unordered_set<uint64_t> uniqueEdges;
+    for (size_t triangle = 0; triangle + 2 < navMeshIndices.size(); triangle += 3) {
+        const std::array triangleIndices = {
+            navMeshIndices[triangle],
+            navMeshIndices[triangle + 1],
+            navMeshIndices[triangle + 2]
+        };
+        for (int edge = 0; edge < 3; ++edge) {
+            const int indexA = triangleIndices[edge];
+            const int indexB = triangleIndices[(edge + 1) % 3];
+            const int low = std::min(indexA, indexB);
+            const int high = std::max(indexA, indexB);
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(low)) << 32u) | static_cast<uint32_t>(high);
+            if (uniqueEdges.insert(key).second) {
+                navEdges.emplace_back(low, high);
+            }
+        }
+    }
+
+    navMeshDebugEdgeObjects.reserve(navEdges.size());
+    for (const auto &[startIndex, endIndex] : navEdges) {
+        const size_t startBase = static_cast<size_t>(startIndex) * 3;
+        const size_t endBase = static_cast<size_t>(endIndex) * 3;
+        auto object = CreateDebugCubeObject("navmesh-edge");
+        PlaceDebugSegment(
+            object,
+            glm::vec3(navMeshVertices[startBase], navMeshVertices[startBase + 1], navMeshVertices[startBase + 2]),
+            glm::vec3(navMeshVertices[endBase], navMeshVertices[endBase + 1], navMeshVertices[endBase + 2]),
+            NAVMESH_DEBUG_EDGE_THICKNESS,
+            NAVMESH_DEBUG_HEIGHT_OFFSET
+        );
+        navMeshDebugEdgeObjects.push_back(object);
+    }
+
+    navPathDebugPointObjects.reserve(NAV_PATH_DEBUG_MAX_POINTS);
+    navPathDebugSegmentObjects.reserve(NAV_PATH_DEBUG_MAX_POINTS > 0 ? NAV_PATH_DEBUG_MAX_POINTS - 1 : 0);
+    for (size_t index = 0; index < NAV_PATH_DEBUG_MAX_POINTS; ++index) {
+        navPathDebugPointObjects.push_back(CreateDebugCubeObject("nav-path-point"));
+        if (index + 1 < NAV_PATH_DEBUG_MAX_POINTS) {
+            navPathDebugSegmentObjects.push_back(CreateDebugCubeObject("nav-path-segment"));
+        }
+    }
+
+    for (auto &object : navMeshDebugVertexObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navMeshDebugEdgeObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navPathDebugPointObjects) {
+        objects.push_back(&object);
+    }
+    for (auto &object : navPathDebugSegmentObjects) {
+        objects.push_back(&object);
+    }
+}
+
+size_t UpdateNavPathDebugObjects(const std::vector<glm::vec3> &pathPoints)
+{
+    const size_t visiblePoints = std::min(pathPoints.size(), NAV_PATH_DEBUG_MAX_POINTS);
+    for (size_t index = 0; index < navPathDebugPointObjects.size(); ++index) {
+        auto &object = navPathDebugPointObjects[index];
+        if (index < visiblePoints) {
+            PlaceDebugPoint(object, pathPoints[index], NAV_PATH_DEBUG_POINT_MARKER_SCALE, NAVMESH_DEBUG_HEIGHT_OFFSET * 2.0f);
+        } else {
+            HideDebugObject(object);
+        }
+    }
+
+    const size_t visibleSegments = visiblePoints > 1 ? visiblePoints - 1 : 0;
+    for (size_t index = 0; index < navPathDebugSegmentObjects.size(); ++index) {
+        auto &object = navPathDebugSegmentObjects[index];
+        if (index < visibleSegments) {
+            PlaceDebugSegment(
+                object,
+                pathPoints[index],
+                pathPoints[index + 1],
+                NAV_PATH_DEBUG_SEGMENT_THICKNESS,
+                NAVMESH_DEBUG_HEIGHT_OFFSET * 2.0f
+            );
+        } else {
+            HideDebugObject(object);
+        }
+    }
+
+    return visiblePoints;
+}
+
+void PushDebugMessage(const std::string &message, const bool logAsError = false)
+{
+    if (message.empty()) {
+        return;
+    }
+    if (logAsError) {
+        std::cerr << message << '\n';
+    } else {
+        std::cout << message << '\n';
+    }
+    overlayState.debugMessages.push_back(message);
+    while (overlayState.debugMessages.size() > OVERLAY_MAX_DEBUG_MESSAGES) {
+        overlayState.debugMessages.pop_front();
+    }
+}
+
+std::string TrimWhitespace(const std::string &value)
+{
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+void PushConsoleLine(const std::string &message)
+{
+    if (message.empty()) {
+        return;
+    }
+    overlayState.consoleLines.push_back(message);
+    while (overlayState.consoleLines.size() > OVERLAY_MAX_CONSOLE_LINES) {
+        overlayState.consoleLines.pop_front();
+    }
+}
+
+bool ParseDoubleArgument(const std::string &text, double &outValue)
+{
+    if (text.empty()) {
+        return false;
+    }
+    char *endPtr = nullptr;
+    const char *startPtr = text.c_str();
+    outValue = std::strtod(text.c_str(), &endPtr);
+    return endPtr != startPtr && *endPtr == '\0';
+}
+
+int LuaConsolePrint(lua_State *state)
+{
+    const int argument_count = lua_gettop(state);
+    std::ostringstream output;
+    for (int i = 1; i <= argument_count; ++i) {
+        if (i > 1) {
+            output << '\t';
+        }
+        size_t length = 0;
+        const char *string_value = luaL_tolstring(state, i, &length);
+        if (string_value != nullptr) {
+            output.write(string_value, static_cast<std::streamsize>(length));
+        }
+        lua_pop(state, 1);
+    }
+
+    const std::string message = output.str();
+    if (!message.empty()) {
+        PushConsoleLine("[lua] " + message);
+    }
+    return 0;
+}
+
+void WrenConsoleWrite(WrenVM *, const char *text)
+{
+    if (text == nullptr) {
+        return;
+    }
+
+    std::string message(text);
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    if (!message.empty()) {
+        PushConsoleLine("[wren] " + message);
+    }
+}
+
+void WrenConsoleError(WrenVM *, WrenErrorType type, const char *module, int line, const char *message)
+{
+    std::ostringstream output;
+    output << "[wren] ";
+    if (type == WREN_ERROR_COMPILE) {
+        output << "Compile error";
+        if (module != nullptr) {
+            output << " in " << module;
+        }
+        if (line >= 0) {
+            output << ":" << line;
+        }
+        output << ": ";
+    } else if (type == WREN_ERROR_RUNTIME) {
+        output << "Runtime error: ";
+    } else {
+        output << "Stack trace";
+        if (module != nullptr) {
+            output << " in " << module;
+        }
+        if (line >= 0) {
+            output << ":" << line;
+        }
+        output << ": ";
+    }
+    output << (message ? message : "unknown error");
+    PushConsoleLine(output.str());
+}
+
+struct ScriptingState {
+    lua_State *luaState = nullptr;
+    WrenVM *wrenVm = nullptr;
+};
+
+ScriptingState scriptingState;
+
+bool InitializeScripting()
+{
+    scriptingState.luaState = luaL_newstate();
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] Failed to create VM");
+        return false;
+    }
+    luaL_openlibs(scriptingState.luaState);
+    lua_pushcfunction(scriptingState.luaState, LuaConsolePrint);
+    lua_setglobal(scriptingState.luaState, "print");
+
+    WrenConfiguration config;
+    wrenInitConfiguration(&config);
+    config.writeFn = WrenConsoleWrite;
+    config.errorFn = WrenConsoleError;
+    scriptingState.wrenVm = wrenNewVM(&config);
+    if (scriptingState.wrenVm == nullptr) {
+        PushConsoleLine("[wren] Failed to create VM");
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void ShutdownScripting()
+{
+    if (scriptingState.wrenVm != nullptr) {
+        wrenFreeVM(scriptingState.wrenVm);
+        scriptingState.wrenVm = nullptr;
+    }
+    if (scriptingState.luaState != nullptr) {
+        lua_close(scriptingState.luaState);
+        scriptingState.luaState = nullptr;
+    }
+}
+
+bool ExecuteLuaScript(const std::string &script)
+{
+    if (scriptingState.luaState == nullptr) {
+        PushConsoleLine("[lua] VM is not initialized");
+        return false;
+    }
+
+    lua_settop(scriptingState.luaState, 0);
+    const int loadStatus = luaL_loadstring(scriptingState.luaState, script.c_str());
+    if (loadStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    const int executeStatus = lua_pcall(scriptingState.luaState, 0, LUA_MULTRET, 0);
+    if (executeStatus != LUA_OK) {
+        const char *errorMessage = lua_tostring(scriptingState.luaState, -1);
+        PushConsoleLine(std::string("[lua] Error: ") + (errorMessage ? errorMessage : "unknown error"));
+        lua_settop(scriptingState.luaState, 0);
+        return false;
+    }
+
+    lua_settop(scriptingState.luaState, 0);
+    return true;
+}
+
+bool ExecuteWrenScript(const std::string &script)
+{
+    if (scriptingState.wrenVm == nullptr) {
+        PushConsoleLine("[wren] VM is not initialized");
+        return false;
+    }
+
+    const WrenInterpretResult result = wrenInterpret(scriptingState.wrenVm, "main", script.c_str());
+    return result == WREN_RESULT_SUCCESS;
+}
+
+void ExecuteConsoleCommand(const std::string &commandLine)
+{
+    const std::string trimmed = TrimWhitespace(commandLine);
+    if (trimmed.empty()) {
+        return;
+    }
+
+    std::istringstream stream(trimmed);
+    std::string command;
+    stream >> command;
+    std::ranges::transform(command, command.begin(), [](const unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    if (command == "print") {
+        std::string message;
+        std::getline(stream, message);
+        message = TrimWhitespace(message);
+        if (message.empty()) {
+            PushConsoleLine("Usage: print <message>");
+        } else {
+            PushConsoleLine(message);
+        }
+        return;
+    }
+
+    if (command == "add") {
+        std::string left;
+        std::string right;
+        std::string extra;
+        stream >> left >> right >> extra;
+        if (left.empty() || right.empty() || !extra.empty()) {
+            PushConsoleLine("Usage: add <number1> <number2>");
+            return;
+        }
+
+        double leftValue = 0.0;
+        double rightValue = 0.0;
+        if (!ParseDoubleArgument(left, leftValue) || !ParseDoubleArgument(right, rightValue)) {
+            PushConsoleLine("add expects numeric arguments");
+            return;
+        }
+
+        const double result = leftValue + rightValue;
+        std::ostringstream resultStream;
+        resultStream << std::setprecision(CONSOLE_RESULT_PRECISION) << result;
+        PushConsoleLine("Result: " + resultStream.str());
+        return;
+    }
+
+    if (command == "lua") {
+        std::string script;
+        std::getline(stream, script);
+        script = TrimWhitespace(script);
+        if (script.empty()) {
+            PushConsoleLine("Usage: lua <script>");
+        } else {
+            ExecuteLuaScript(script);
+        }
+        return;
+    }
+
+    if (command == "wren") {
+        std::string script;
+        std::getline(stream, script);
+        script = TrimWhitespace(script);
+        if (script.empty()) {
+            PushConsoleLine("Usage: wren <script>");
+        } else {
+            ExecuteWrenScript(script);
+        }
+        return;
+    }
+
+    if (command == "help") {
+        PushConsoleLine("Available commands:");
+        PushConsoleLine("  print <message> - Prints a message to the console");
+        PushConsoleLine("  add <number1> <number2> - Adds two numbers and prints the result");
+        PushConsoleLine("  lua <script> - Executes a Lua script - eg. lua print(1 + 2)");
+        PushConsoleLine("  wren <script> - Executes a Wren script - eg. wren System.print(1 + 2)");
+        PushConsoleLine("  help - Displays this help message");
+        return;
+    }
+
+    PushConsoleLine("Unknown command: " + command);
+}
+
+void SetConsoleOpen(AppState &app, const bool open)
+{
+    overlayState.consoleOpen = open;
+    if (overlayState.consoleOpen) {
+        overlayState.consoleInput.clear();
+        app.mouseLookEnabled = false;
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_StartTextInput();
+        return;
+    }
+    SDL_StopTextInput();
+}
+
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
 };
@@ -255,7 +1133,7 @@ bool EnsureRotationResources(GpuState &gpu)
     }
 
     gpu.rotationUniformBuffer = [&] {
-        const WGPUBufferDescriptor bufferDesc {
+        constexpr WGPUBufferDescriptor bufferDesc {
             .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
             .size = sizeof(RotationUniform),
             .mappedAtCreation = 0,
@@ -416,7 +1294,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4f {
         .fragment = &fragmentState,
     };
 
-    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
+    const auto pipeline = wgpuDeviceCreateRenderPipeline(gpu.device, &pipelineDesc);
     wgpuShaderModuleRelease(shaderModule);
     return pipeline;
 }
@@ -593,6 +1471,14 @@ bool ConfigureSurface(AppState &app)
         return false;
     }
 
+    auto selectedMode = WGPUPresentMode_Fifo;
+    for (size_t i = 0; i < caps.presentModeCount; ++i) {
+        if (caps.presentModes[i] == WGPUPresentMode_Mailbox) {
+            selectedMode = WGPUPresentMode_Mailbox;
+            break;
+        }
+    }
+
     app.gpu.surfaceConfig = WGPUSurfaceConfiguration{
         .device = app.gpu.device,
         .format = ChooseSurfaceFormat(caps),
@@ -600,7 +1486,7 @@ bool ConfigureSurface(AppState &app)
         .width = app.gpu.width,
         .height = app.gpu.height,
         .alphaMode = caps.alphaModeCount > 0 ? caps.alphaModes[0] : WGPUCompositeAlphaMode_Auto,
-        .presentMode = caps.presentModeCount > 0 ? caps.presentModes[0] : WGPUPresentMode_Fifo,
+        .presentMode = selectedMode,
     };
     wgpuSurfaceConfigure(app.gpu.surface, &app.gpu.surfaceConfig);
     wgpuSurfaceCapabilitiesFreeMembers(caps);
@@ -629,7 +1515,7 @@ bool ConfigureSurface(AppState &app)
     }
 
     app.gpu.defaultSamplerBindGroupLayout = [&] {
-        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
             WGPUBindGroupLayoutEntry{
                 .binding = 0,
                 .visibility = WGPUShaderStage_Fragment,
@@ -657,6 +1543,24 @@ bool ConfigureSurface(AppState &app)
             },
             WGPUBindGroupLayoutEntry{
                 .binding = 3,
+                .visibility = WGPUShaderStage_Fragment,
+                .texture = WGPUTextureBindingLayout{
+                    .sampleType = WGPUTextureSampleType_Float,
+                    .viewDimension = WGPUTextureViewDimension_2D,
+                    .multisampled = false,
+                },
+            },
+            WGPUBindGroupLayoutEntry{
+                .binding = 4,
+                .visibility = WGPUShaderStage_Fragment,
+                .texture = WGPUTextureBindingLayout{
+                    .sampleType = WGPUTextureSampleType_Float,
+                    .viewDimension = WGPUTextureViewDimension_2D,
+                    .multisampled = false,
+                },
+            },
+            WGPUBindGroupLayoutEntry{
+                .binding = 5,
                 .visibility = WGPUShaderStage_Fragment,
                 .buffer = WGPUBufferBindingLayout{
                     .type = WGPUBufferBindingType_Uniform,
@@ -836,11 +1740,9 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
     for (const auto& obj : objects) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, obj->uniformBindGroup, 0, nullptr);
 
-        auto it = meshes.find(obj->meshName);
-
-        if (it != meshes.end()) {
-            const Mesh& mesh = it->second;
-            for (const auto& primitive : mesh.primitives) {
+        if (auto it = meshes.find(obj->meshName); it != meshes.end()) {
+            const auto&[primitives] = it->second;
+            for (const auto& primitive : primitives) {
                 if (primitive.vertexCount != 0 && primitive.vertexBuffer != nullptr) {
                     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, primitive.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 }
@@ -855,6 +1757,43 @@ void RenderShadowObjects(WGPURenderPassEncoder pass) {
                 }
             }
         }
+    }
+}
+
+void PrepareRmlOverlay(AppState &app)
+{
+    if (!overlayState.rmlOverlay) {
+        return;
+    }
+
+    overlayState.rmlOverlay->SetDimensions(app.gpu.width, app.gpu.height);
+    overlayState.rmlOverlay->SetData(
+        overlayState.currentFps,
+        hoverDebugText,
+        characterDebugText,
+        navMeshDebugText,
+        overlayState.debugMessages,
+        overlayState.consoleLines,
+        overlayState.consoleOpen,
+        overlayState.consoleInput
+    );
+    overlayState.rmlOverlay->PrepareFrame();
+}
+
+void UpdateFpsCounter()
+{
+    const auto now = SDL_GetPerformanceCounter();
+    if (overlayState.fpsCounterStart == 0) {
+        overlayState.fpsCounterStart = now;
+    }
+
+    overlayState.fpsFrameCount += 1;
+    const auto elapsed = now - overlayState.fpsCounterStart;
+    const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    if (const auto elapsedSeconds = static_cast<double>(elapsed) / frequency; elapsedSeconds >= FPS_UPDATE_INTERVAL_SECONDS) {
+        overlayState.currentFps = static_cast<float>(static_cast<double>(overlayState.fpsFrameCount) / elapsedSeconds);
+        overlayState.fpsFrameCount = 0;
+        overlayState.fpsCounterStart = now;
     }
 }
 
@@ -881,13 +1820,13 @@ bool DrawFrame(AppState &app)
     );
 #endif
 
-    WGPUTextureView view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+    auto view = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
     if (!view) {
         wgpuTextureRelease(surfaceTexture.texture);
         return false;
     }
 
-    gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
+    // gameObject1.rotation = glm::quat(glm::vec3(0.0f, std::sin(static_cast<float>(SDL_GetTicks()) * 0.001f) * 1.2f, 0.0f));
     gameObject2.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
     // gameObject3.rotation = glm::quat(glm::vec3(0.0f, static_cast<float>(SDL_GetTicks()) * 0.001f, 0.0f));
 
@@ -933,7 +1872,7 @@ bool DrawFrame(AppState &app)
     }
 
     auto shadowLight = directionalLight;
-    for (int cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
+    for (auto cascadeIndex = 0; cascadeIndex < CASCADE_COUNT; ++cascadeIndex) {
         shadowLight.cascades[0] = directionalLight.cascades[cascadeIndex];
         wgpuQueueWriteBuffer(app.gpu.queue, app.gpu.lightUniformBuffer, 0, &shadowLight, sizeof(LightUniform));
 
@@ -1013,15 +1952,34 @@ bool DrawFrame(AppState &app)
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
+    WGPURenderPassColorAttachment colorAttachment2 {
+        .view = view,
+        .depthSlice = WGPU_DEPTH_SLICE_UNDEFINED,
+        .loadOp = WGPULoadOp_Load,
+        .storeOp = WGPUStoreOp_Store,
+    };
+
+    WGPURenderPassDescriptor passDesc2 {
+        .colorAttachmentCount = 1,
+        .colorAttachments = &colorAttachment2,
+    };
+
 #ifdef TRIANGLE_SAMPLE
-    passDesc.depthStencilAttachment = nullptr;
-    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
     wgpuRenderPassEncoderSetPipeline(pass, app.gpu.pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, app.gpu.rotationBindGroup, 0, nullptr);
     wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 #endif
+
+    pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
+    PrepareRmlOverlay(app);
+    if (overlayState.rmlOverlay) {
+        overlayState.rmlOverlay->Render(pass);
+    }
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
 
     WGPUCommandBuffer commandBuffer = wgpuCommandEncoderFinish(encoder, nullptr);
     if (!commandBuffer) {
@@ -1057,9 +2015,9 @@ struct DeviceRequestContext {
 
 bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *outAdapter)
 {
-    std::atomic<bool> done = false;
-    bool ok = false;
-    AdapterRequestContext context{&done, &ok, outAdapter};
+    std::atomic done = false;
+    auto ok = false;
+    AdapterRequestContext context{.done = &done, .ok = &ok, .adapter = outAdapter};
 
     WGPURequestAdapterCallbackInfo callbackInfo{};
 #if defined(__EMSCRIPTEN__)
@@ -1068,7 +2026,7 @@ bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *out
     callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
 #endif
     callbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView, void *userdata1, void *) {
-        auto *state = static_cast<AdapterRequestContext *>(userdata1);
+        const auto *state = static_cast<AdapterRequestContext *>(userdata1);
         if (status == WGPURequestAdapterStatus_Success && adapter != nullptr) {
             *state->ok = true;
             *state->adapter = adapter;
@@ -1096,9 +2054,9 @@ bool WaitForAdapter(WGPUInstance instance, WGPUSurface surface, WGPUAdapter *out
 
 bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDevice)
 {
-    std::atomic<bool> done = false;
-    bool ok = false;
-    DeviceRequestContext context{&done, &ok, outDevice};
+    std::atomic done = false;
+    auto ok = false;
+    DeviceRequestContext context{.done = &done, .ok = &ok, .device = outDevice};
 
     WGPURequestDeviceCallbackInfo callbackInfo{};
 #if defined(__EMSCRIPTEN__)
@@ -1107,7 +2065,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
     callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
 #endif
     callbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView, void *userdata1, void *) {
-        auto *state = static_cast<DeviceRequestContext *>(userdata1);
+        const auto *state = static_cast<DeviceRequestContext *>(userdata1);
         if (status == WGPURequestDeviceStatus_Success && device != nullptr) {
             *state->ok = true;
             *state->device = device;
@@ -1116,7 +2074,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
     };
     callbackInfo.userdata1 = &context;
 
-    WGPUDeviceDescriptor deviceDesc{};
+    constexpr WGPUDeviceDescriptor deviceDesc{};
     wgpuAdapterRequestDevice(adapter, &deviceDesc, callbackInfo);
 
     while (!done.load()) {
@@ -1133,7 +2091,7 @@ bool WaitForDevice(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice *outDe
 
 bool InitializeGraphics(AppState &app)
 {
-    WGPUInstanceDescriptor instanceDesc{};
+    constexpr WGPUInstanceDescriptor instanceDesc{};
     app.gpu.instance = wgpuCreateInstance(&instanceDesc);
     if (!app.gpu.instance) {
         std::cerr << "Failed to create WebGPU instance\n";
@@ -1177,27 +2135,63 @@ void PumpEvents(AppState &app)
             app.running = false;
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             ConfigureSurface(app);
+            if (overlayState.rmlOverlay) {
+                overlayState.rmlOverlay->SetDimensions(app.gpu.width, app.gpu.height);
+            }
+            PushDebugMessage("Surface reconfigured after window resize");
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
+            PushDebugMessage("Mouse-look disabled due to focus loss");
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
+            SetConsoleOpen(app, !overlayState.consoleOpen);
+        } else if (overlayState.consoleOpen
+            && overlayState.rmlOverlay
+            && overlayState.rmlOverlay->ProcessEvent(ev)) {
+            // Event consumed by RmlUi while console is open.
+        } else if (overlayState.consoleOpen && ev.type == SDL_TEXTINPUT) {
+            for (size_t i = 0; ev.text.text[i] != '\0'; ++i) {
+                const unsigned char ch = static_cast<unsigned char>(ev.text.text[i]);
+                if (ch < 32u || ch > 126u) {
+                    continue;
+                }
+                if (overlayState.consoleInput.size() >= OVERLAY_MAX_CONSOLE_INPUT_LENGTH) {
+                    break;
+                }
+                overlayState.consoleInput.push_back(static_cast<char>(ch));
+            }
+        } else if (overlayState.consoleOpen && ev.type == SDL_KEYDOWN) {
+            if (ev.key.keysym.scancode == SDL_SCANCODE_BACKSPACE && !overlayState.consoleInput.empty()) {
+                overlayState.consoleInput.pop_back();
+            } else if (ev.key.keysym.scancode == SDL_SCANCODE_RETURN || ev.key.keysym.scancode == SDL_SCANCODE_KP_ENTER) {
+                ExecuteConsoleCommand(overlayState.consoleInput);
+                overlayState.consoleInput.clear();
+            } else if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                SetConsoleOpen(app, false);
+            }
+        } else if (overlayState.consoleOpen) {
+            // STOP PROCESSING FURTHER EVENTS BECAUSE CONSOLE IS OPEN
         } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT && !app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = true;
+                PushDebugMessage("Mouse-look enabled");
             } else {
-                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to enable mouse-look mode: ") + SDL_GetError(), true);
             }
         } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT && app.mouseLookEnabled) {
             if (SDL_SetRelativeMouseMode(SDL_FALSE) == 0) {
                 app.mouseLookEnabled = false;
+                PushDebugMessage("Mouse-look disabled");
             } else {
-                std::cerr << "Failed to disable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to disable mouse-look mode: ") + SDL_GetError(), true);
             }
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
             const bool enableMouseLook = !app.mouseLookEnabled;
             if (!enableMouseLook || SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
                 app.mouseLookEnabled = enableMouseLook;
+                PushDebugMessage(enableMouseLook ? "Mouse-look enabled" : "Mouse-look disabled");
             } else {
-                std::cerr << "Failed to enable mouse-look mode: " << SDL_GetError() << '\n';
+                PushDebugMessage(std::string("Failed to enable mouse-look mode: ") + SDL_GetError(), true);
             }
             if (!enableMouseLook) {
                 SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -1205,6 +2199,18 @@ void PumpEvents(AppState &app)
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_1) {
+            if (audioManager.PlaySoundEffect(DEFAULT_SFX_NAME) < 0) {
+                PushDebugMessage(std::string("Failed to play sound effect '") + DEFAULT_SFX_NAME + std::string("': ") + Mix_GetError(), true);
+            }
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_M) {
+            if (audioManager.IsMusicPlaying()) {
+                audioManager.StopMusic();
+            } else {
+                if (!audioManager.PlayMusic(DEFAULT_MUSIC_NAME, -1)) {
+                    PushDebugMessage(std::string("Failed to play music '") + DEFAULT_MUSIC_NAME + std::string("': ") + Mix_GetError(), true);
+                }
+            }
         } else if (ev.type == SDL_MOUSEMOTION && app.mouseLookEnabled) {
             app.mouseDeltaX += static_cast<float>(ev.motion.xrel);
             app.mouseDeltaY += static_cast<float>(ev.motion.yrel);
@@ -1212,26 +2218,58 @@ void PumpEvents(AppState &app)
     }
 }
 
+void FramerateLimiter(const double targetHz = 120.0f)
+{
+    const auto targetFrameSec = 1.0 / targetHz;
+    const auto freq = SDL_GetPerformanceFrequency();
+
+    static auto nextFrame = SDL_GetPerformanceCounter();
+    nextFrame += static_cast<Uint64>(targetFrameSec * freq);
+
+    while (true) {
+        const auto now = SDL_GetPerformanceCounter();
+        if (now >= nextFrame) break;
+
+        if (const auto remainingSec = static_cast<double>(nextFrame - now) / static_cast<double>(freq); remainingSec > 0.002)
+        {
+            SDL_Delay(static_cast<Uint32>((remainingSec - 0.001) * 1000.0));
+        }
+        else
+        {
+            // spin/yield
+            SDL_Delay(0);
+        }
+    }
+}
+
 void UpdateFrameTiming(AppState &app)
 {
-    const Uint64 now = SDL_GetPerformanceCounter();
+    const auto now = SDL_GetPerformanceCounter();
     if (app.lastFrameCounter == 0) {
         app.lastFrameCounter = now;
         app.frameDeltaSeconds = 1.0f / 60.0f;
+        UpdateFpsCounter();
         return;
     }
 
-    const Uint64 elapsed = now - app.lastFrameCounter;
+    const auto elapsed = now - app.lastFrameCounter;
     app.lastFrameCounter = now;
-    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.frameDeltaSeconds = static_cast<float>(static_cast<double>(elapsed) / frequency);
     app.frameDeltaSeconds = std::clamp(app.frameDeltaSeconds, 0.0f, 0.1f);
+    UpdateFpsCounter();
 }
 
 void UpdateCameraFromInput(AppState &app)
 {
-    const Uint8 *keyboardState = SDL_GetKeyboardState(nullptr);
-    float moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
+    if (overlayState.consoleOpen) {
+        app.mouseDeltaX = 0.0f;
+        app.mouseDeltaY = 0.0f;
+        return;
+    }
+
+    const auto *keyboardState = SDL_GetKeyboardState(nullptr);
+    auto moveDelta = CAMERA_MOVE_SPEED * app.frameDeltaSeconds;
     if (keyboardState[SDL_SCANCODE_LSHIFT] || keyboardState[SDL_SCANCODE_RSHIFT]) {
         moveDelta *= CAMERA_MOVE_BOOST;
     }
@@ -1268,6 +2306,69 @@ void UpdateCameraFromInput(AppState &app)
     app.mouseDeltaY = 0.0f;
 }
 
+bool BuildMouseRay(const AppState &app, glm::vec3 &origin, glm::vec3 &direction)
+{
+    if (app.gpu.width == 0 || app.gpu.height == 0) {
+        return false;
+    }
+
+    int mouseX = 0;
+    int mouseY = 0;
+    SDL_GetMouseState(&mouseX, &mouseY);
+
+    const glm::vec4 viewport(0.0f, 0.0f, static_cast<float>(app.gpu.width), static_cast<float>(app.gpu.height));
+    const auto clampedX = static_cast<float>(std::clamp(mouseX, 0, static_cast<int>(app.gpu.width)));
+    const auto clampedY = static_cast<float>(std::clamp(mouseY, 0, static_cast<int>(app.gpu.height)));
+    const glm::vec3 screenNear(clampedX, static_cast<float>(app.gpu.height) - clampedY, 0.0f);
+    const glm::vec3 screenFar(clampedX, static_cast<float>(app.gpu.height) - clampedY, 1.0f);
+
+    const auto worldNear = glm::unProject(screenNear, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const auto worldFar = glm::unProject(screenFar, app.gpu.viewMatrix, app.gpu.projectionMatrix, viewport);
+    const auto rayDirection = worldFar - worldNear;
+    if (glm::length(rayDirection) <= 0.0001f) {
+        return false;
+    }
+
+    origin = worldNear;
+    direction = glm::normalize(rayDirection);
+    return true;
+}
+
+void UpdatePhysicsScene(const AppState &app, JoltRuntime &jolt, NavMeshRuntime &navMesh)
+{
+    const auto *keyboardState = SDL_GetKeyboardState(nullptr);
+    if (!overlayState.consoleOpen) {
+        jolt.ApplyCharacterInput(keyboardState);
+    }
+    jolt.StepSimulation(app.frameDeltaSeconds);
+    jolt.SyncScene(gameObject1, capsuleCharacterObject);
+
+    characterDebugText = jolt.IsCharacterGroundedPublic() ? "Character: Grounded" : "Character: Airborne";
+
+    glm::vec3 rayOrigin(0.0f);
+    glm::vec3 rayDirection(0.0f);
+    if (!BuildMouseRay(app, rayOrigin, rayDirection)) {
+        hoverDebugText = "Hover: None";
+        return;
+    }
+
+    const auto hoveredObject = jolt.GetHoveredObjectName(rayOrigin, rayDirection, 200.0f);
+    hoverDebugText = hoveredObject.empty() ? "Hover: None" : "Hover: " + hoveredObject;
+
+    std::vector<glm::vec3> navPathPoints;
+    const bool hasPath = navMesh.FindPath(capsuleCharacterObject.translation, gameObject1.translation, navPathPoints);
+    if (hasPath) {
+        const size_t shownPoints = UpdateNavPathDebugObjects(navPathPoints);
+        navMeshDebugText = "NavMesh: Path points " + std::to_string(navPathPoints.size()) + " (showing " + std::to_string(shownPoints) + ")";
+    } else {
+        UpdateNavPathDebugObjects({});
+        navMeshDebugText = "NavMesh: No path";
+    }
+}
+
+JoltRuntime *activeJoltRuntime = nullptr;
+NavMeshRuntime *activeNavMeshRuntime = nullptr;
+
 #if defined(__EMSCRIPTEN__)
 void WasmMainLoop(void *userdata)
 {
@@ -1279,14 +2380,17 @@ void WasmMainLoop(void *userdata)
         return;
     }
     UpdateCameraFromInput(*app);
+    if (activeJoltRuntime != nullptr && activeNavMeshRuntime != nullptr) {
+        UpdatePhysicsScene(*app, *activeJoltRuntime, *activeNavMeshRuntime);
+    }
     DrawFrame(*app);
 }
 #endif
 
 } // namespace
 
-std::string readShaderFile(const std::string& filepath) {
-    std::ifstream file(filepath);
+static std::string readShaderFile(const std::string& filepath) {
+    const std::ifstream file(filepath);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file: " + filepath);
     }
@@ -1295,14 +2399,14 @@ std::string readShaderFile(const std::string& filepath) {
     return buffer.str();
 }
 
-WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepath) {
+static WGPUShaderModule createShaderModule(const WGPUDevice device, const std::string& filepath) {
     const std::string shaderCode = readShaderFile(filepath);
     WGPUShaderSourceWGSL wgslSource {
         .chain = WGPUChainedStruct{
             .next = nullptr,
             .sType = WGPUSType_ShaderSourceWGSL
         },
-        .code = {shaderCode.c_str(), WGPU_STRLEN},
+        .code = {.data = shaderCode.c_str(), .length = WGPU_STRLEN},
     };
 
     const WGPUShaderModuleDescriptor shaderDesc {
@@ -1314,7 +2418,7 @@ WGPUShaderModule createShaderModule(WGPUDevice device, const std::string& filepa
 
 int main()
 {
-    auto player = GameObject::Instantiate(glm::vec3(2.0f, 0.0f, -2.0f), glm::identity<glm::quat>());
+    // auto player = GameObject::Instantiate(glm::vec3(2.0f, 0.0f, -2.0f), glm::identity<glm::quat>());
     IMG_Init(IMG_INIT_PNG);
 
     gameObject1.meshName = "cube";
@@ -1332,24 +2436,87 @@ int main()
     gameObject3.rotation = glm::quat(glm::vec3(-0.5f * glm::pi<float>(), 0.0f, 0.0f));
     gameObject3.scale = glm::vec3(40.0f, 40.0f, 40.0f);
 
+    gameObject4.meshName = "cube";
+    gameObject4.translation = glm::vec3(2.0f, -3.5f, 2.0f);
+    gameObject4.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
+    gameObject4.scale = glm::vec3(1.0f, 1.0f, 1.0f);
+
+    capsuleCharacterObject.meshName = "cube";
+    capsuleCharacterObject.translation = glm::vec3(-2.0f, -2.8f, -2.0f);
+    capsuleCharacterObject.rotation = glm::quat(glm::vec3(0.0f, 0.0f, 0.0f));
+    capsuleCharacterObject.scale = glm::vec3(0.6f, 1.8f, 0.6f);
+
     objects.push_back(&gameObject1);
     // objects.push_back(gameObject2);
     objects.push_back(&gameObject3);
+    objects.push_back(&gameObject4);
+    objects.push_back(&capsuleCharacterObject);
 
     SDL_SetMainReady();
 
     JoltRuntime jolt;
     if (!jolt.Initialize()) {
-        std::cerr << "Failed to initialize Jolt\n";
+        PushDebugMessage("Failed to initialize Jolt", true);
         return 1;
     }
-    std::cout << "Jolt initialized\n";
+    PushDebugMessage("Jolt initialized");
+    if (!jolt.CreateScene(gameObject3.translation, gameObject1.translation, gameObject4.translation, capsuleCharacterObject.translation)) {
+        PushDebugMessage("Failed to create Jolt collision scene", true);
+        return 1;
+    }
+    PushDebugMessage("Jolt collision scene initialized (plane, box, capsule)");
+    activeJoltRuntime = &jolt;
+
+    NavMeshRuntime navMesh;
+    std::vector<float> navMeshVertices;
+    std::vector<int> navMeshIndices;
+    BuildNavMeshSourceGeometry(
+        gameObject3.translation,
+        gameObject1.translation,
+        gameObject4.translation,
+        navMeshVertices,
+        navMeshIndices
+    );
+    if (!navMesh.Build(navMeshVertices, navMeshIndices)) {
+        PushDebugMessage(navMesh.GetStatus(), true);
+        return 1;
+    }
+    navMeshDebugText = navMesh.GetStatus();
+    PushDebugMessage("Recast/Detour navmesh initialized");
+    InitializeNavDebugObjects(navMesh.GetDebugVertices(), navMesh.GetDebugIndices());
+    PushDebugMessage("Navmesh and nav path debug visualization enabled");
+    activeNavMeshRuntime = &navMesh;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
+        PushDebugMessage(std::string("SDL_Init failed: ") + SDL_GetError(), true);
         return 1;
     }
-    std::cout << "SDL initialized\n";
+    SDL_StopTextInput();
+    PushDebugMessage("SDL initialized");
+
+    if (std::string audioError; !audioManager.Initialize(audioError, 32)) {
+        std::cerr << "Audio initialization failed: " << audioError << '\n';
+    } else {
+        if (std::filesystem::exists(DEFAULT_SFX_PATH)) {
+            if (!audioManager.LoadSoundEffect(DEFAULT_SFX_NAME, DEFAULT_SFX_PATH, audioError)) {
+                std::cerr << "Failed to load sound effect from " << DEFAULT_SFX_PATH << ": " << audioError << '\n';
+            } else {
+                std::cout << "Loaded sound effect: " << DEFAULT_SFX_PATH << '\n';
+            }
+        } else {
+            std::cout << "No default sound effect found at " << DEFAULT_SFX_PATH << '\n';
+        }
+
+        if (std::filesystem::exists(DEFAULT_MUSIC_PATH)) {
+            if (!audioManager.LoadMusic(DEFAULT_MUSIC_NAME, DEFAULT_MUSIC_PATH, audioError)) {
+                std::cerr << "Failed to load music from " << DEFAULT_MUSIC_PATH << ": " << audioError << '\n';
+            } else {
+                std::cout << "Loaded music track: " << DEFAULT_MUSIC_PATH << '\n';
+            }
+        } else {
+            std::cout << "No default music track found at " << DEFAULT_MUSIC_PATH << '\n';
+        }
+    }
 
     AppState app;
     app.window = SDL_CreateWindow(
@@ -1361,48 +2528,57 @@ int main()
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN
     );
     if (!app.window) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
+        PushDebugMessage(std::string("SDL_CreateWindow failed: ") + SDL_GetError(), true);
         SDL_Quit();
         return 1;
     }
-    std::cout << "SDL window created\n";
+    PushDebugMessage("SDL window created");
 
     if (!InitializeGraphics(app)) {
+        PushDebugMessage("Failed to initialize WebGPU", true);
         ReleaseGpu(app.gpu);
         SDL_DestroyWindow(app.window);
         SDL_Quit();
         return 1;
     }
-    std::cout << "WebGPU initialized\n";
+    PushDebugMessage("WebGPU initialized");
 
     shaders["forwardShader"] = createShaderModule(app.gpu.device, "assets/shaders/forward_renderer.wgsl");
     shaders["shadowCaster"] = createShaderModule(app.gpu.device, "assets/shaders/shadow_caster.wgsl");
+    overlayState.rmlOverlay = std::make_unique<RmlUiOverlay>();
+    if (!overlayState.rmlOverlay->Initialize(app.gpu.device, app.gpu.queue, app.gpu.surfaceConfig.format, app.gpu.width, app.gpu.height)) {
+        PushDebugMessage("Failed to initialize RmlUi overlay", true);
+        overlayState.rmlOverlay.reset();
+        ReleaseGpu(app.gpu);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 1;
+    }
+    PushDebugMessage("RmlUi overlay initialized");
 
     AssetManager assetManager(app.gpu.device, app.gpu.queue);
 
-    std::vector<Primitive> cube_primitives = std::vector<Primitive>{
+    auto cube_primitives = std::vector{
         Primitive::CreateFromPremadeData(app.gpu.device, boxVertices, boxIndices, "sample.png"),
     };
     meshes["cube"] = Mesh { .primitives = cube_primitives };
 
-    std::vector<Primitive> plane_primitives = std::vector<Primitive>{
+    auto plane_primitives = std::vector{
         Primitive::CreateFromPremadeData(app.gpu.device, planeVertices, planeIndices, "sample.png"),
     };
     meshes["plane"] = Mesh { .primitives = plane_primitives };
 
-    const std::string modelPath = "assets/BoomBox.gltf";
-    if (std::filesystem::exists(modelPath)) {
+    if (const std::string modelPath = "assets/BoomBox.gltf"; std::filesystem::exists(modelPath)) {
         std::vector<Primitive> boomBoxPrimitives;
-        std::string loadError;
-        if (LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
+        if (std::string loadError; LoadGltfPrimitives(app.gpu, assetManager, modelPath, materials, boomBoxPrimitives, loadError)) {
             meshes["duck"] = Mesh{ .primitives = std::move(boomBoxPrimitives) };
             objects.push_back(&gameObject2);
-            std::cout << "Loaded glTF model: " << modelPath << "\n";
+            PushDebugMessage("Loaded glTF model: " + modelPath);
         } else {
-            std::cerr << "Failed to load glTF model: " << modelPath << " error: " << loadError << "\n";
+            PushDebugMessage("Failed to load glTF model: " + modelPath + " error: " + loadError, true);
         }
     } else {
-        std::cout << "BoomBox glTF not found, skipping: " << modelPath << "\n";
+        PushDebugMessage("BoomBox glTF not found, skipping: " + modelPath);
     }
 
     WGPUBufferDescriptor lightUniformBufferDesc {
@@ -1420,7 +2596,7 @@ int main()
     app.gpu.cameraUniformBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &cameraUniformBufferDesc);
 
     std::cout << "Creating bind group layouts for meshes\n";
-    const auto meshBindGroupLayoutEntries = std::to_array<WGPUBindGroupLayoutEntry>({
+    constexpr auto meshBindGroupLayoutEntries = std::to_array<WGPUBindGroupLayoutEntry>({
         WGPUBindGroupLayoutEntry{
             .binding = 0,
             .visibility = WGPUShaderStage_Vertex,
@@ -1463,7 +2639,7 @@ int main()
     }
 
     app.gpu.sceneBindGroupLayout = [&] {
-        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
             WGPUBindGroupLayoutEntry{
                 .binding = 0,
                 .visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment,
@@ -1626,7 +2802,11 @@ int main()
     std::string sampleTextureError;
     const auto sampleTexture = assetManager.RequestTexture("sample.png", sampleTextureError);
     if (!sampleTexture) {
-        std::cerr << "Failed to load default texture sample.png: " << sampleTextureError << "\n";
+        PushDebugMessage("Failed to load default texture sample.png: " + sampleTextureError, true);
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
         return 1;
     }
 
@@ -1655,6 +2835,10 @@ int main()
         .baseColorTextureView = textureView,
         .metallicRoughnessTexture = texture,
         .metallicRoughnessTextureView = textureView,
+        .normalTexture = texture,
+        .normalTextureView = textureView,
+        .emissiveTexture = texture,
+        .emissiveTextureView = textureView,
         .pbrParamsBuffer = sampleMaterialBuffer,
         .bindGroup = [&] {
             const auto entries = std::to_array<WGPUBindGroupEntry>({
@@ -1672,6 +2856,14 @@ int main()
                 },
                 WGPUBindGroupEntry{
                     .binding = 3,
+                    .textureView = textureView,
+                },
+                WGPUBindGroupEntry{
+                    .binding = 4,
+                    .textureView = textureView,
+                },
+                WGPUBindGroupEntry{
+                    .binding = 5,
                     .buffer = sampleMaterialBuffer,
                     .size = sizeof(PbrMaterialUniform),
                 },
@@ -1704,7 +2896,7 @@ int main()
 
     std::cout << "Creating forward renderer pipeline\n";
     pipelines["forwardRenderer"] = [&] {
-        WGPUVertexAttribute vertexAttributes[] = {
+        constexpr WGPUVertexAttribute vertexAttributes[] = {
             {
                 .format = WGPUVertexFormat_Float32x3,
                 .offset = offsetof(Vertex, position),
@@ -1858,6 +3050,19 @@ int main()
         return wgpuDeviceCreateRenderPipeline(app.gpu.device, &pipelineDesc);
     }();
 
+    if (!InitializeScripting()) {
+        PushDebugMessage("Failed to initialize scripting runtimes", true);
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
+        ReleaseGpu(app.gpu);
+        SDL_DestroyWindow(app.window);
+        SDL_Quit();
+        return 1;
+    }
+    PushDebugMessage("Scripting runtimes initialized");
+
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop_arg(WasmMainLoop, &app, 0, 1);
     return 0;
@@ -1869,15 +3074,19 @@ int main()
             break;
         }
         UpdateCameraFromInput(app);
+        UpdatePhysicsScene(app, jolt, navMesh);
         if (!DrawFrame(app)) {
-            std::cerr << "DrawFrame failed\n";
+            PushDebugMessage("DrawFrame failed", true);
             break;
         }
-        SDL_Delay(16);
+        FramerateLimiter();
     }
 
-    for (const auto& [key, value] : meshes) {
-        for (const auto& primitive : value.primitives) {
+    activeJoltRuntime = nullptr;
+    activeNavMeshRuntime = nullptr;
+
+    for (const auto &[primitives]: meshes | std::views::values) {
+        for (const auto& primitive : primitives) {
             if (primitive.vertexBuffer) {
                 wgpuBufferRelease(primitive.vertexBuffer);
             }
@@ -1897,8 +3106,13 @@ int main()
             material.pbrParamsBuffer = nullptr;
         }
     }
-
+    ShutdownScripting();
+    if (overlayState.rmlOverlay) {
+        overlayState.rmlOverlay->Shutdown();
+        overlayState.rmlOverlay.reset();
+    }
     ReleaseGpu(app.gpu);
+    audioManager.Shutdown();
     SDL_DestroyWindow(app.window);
     SDL_Quit();
     return 0;

@@ -54,12 +54,14 @@ fn vs_main(
 @group(2) @binding(0) var myTexture: texture_2d<f32>;
 @group(2) @binding(1) var mySampler: sampler;
 @group(2) @binding(2) var metallicRoughnessTexture: texture_2d<f32>;
+@group(2) @binding(3) var normalTexture: texture_2d<f32>;
+@group(2) @binding(4) var emissiveTexture: texture_2d<f32>;
 struct MaterialParams {
     base_color_factor: vec4<f32>,
     emissive_factor_metallic: vec4<f32>,
     roughness_occlusion_alpha_cutoff_flags: vec4<f32>,
 }
-@group(2) @binding(3) var<uniform> material: MaterialParams;
+@group(2) @binding(5) var<uniform> material: MaterialParams;
 
 @group(3) @binding(0) var shadowMap: texture_depth_2d_array;
 @group(3) @binding(1) var shadowSampler: sampler_comparison;
@@ -107,6 +109,20 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
+fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
+    let dp1 = dpdx(p);
+    let dp2 = dpdy(p);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let invmax = inverseSqrt(max(dot(t, t), dot(b, b)));
+    return mat3x3<f32>(t * invmax, b * invmax, n);
+}
+
 @fragment
 fn fs_main(
     in: VertexOutput,
@@ -116,6 +132,8 @@ fn fs_main(
     let material_flags = u32(material.roughness_occlusion_alpha_cutoff_flags.w + 0.5);
     let is_alpha_mask = (material_flags & 1u) != 0u;
     let has_metallic_roughness_texture = (material_flags & 2u) != 0u;
+    let has_normal_texture = (material_flags & 4u) != 0u;
+    let has_emissive_texture = (material_flags & 8u) != 0u;
     if (is_alpha_mask && base_color.a < material.roughness_occlusion_alpha_cutoff_flags.z) {
         discard;
     }
@@ -125,7 +143,11 @@ fn fs_main(
     let roughness = clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_multiplier.x, 0.045, 1.0);
     let metallic = clamp(material.emissive_factor_metallic.w * metallic_roughness_multiplier.y, 0.0, 1.0);
 
-    let n = normalize(in.world_normal);
+    var n = normalize(in.world_normal);
+    if (has_normal_texture) {
+        let normal_sample = textureSample(normalTexture, mySampler, in.tex_coords).xyz * 2.0 - vec3<f32>(1.0);
+        n = normalize(cotangent_frame(n, in.world_position, in.tex_coords) * normal_sample);
+    }
     let v = normalize(camera.pos.xyz - in.world_position);
     let l = normalize(light.pos.xyz - in.world_position);
     let h = normalize(v + l);
@@ -177,7 +199,10 @@ fn fs_main(
 
     let direct_lighting = (diffuse + specular) * n_dot_l * visibility;
     let ambient = vec3<f32>(0.03) * albedo * material.roughness_occlusion_alpha_cutoff_flags.y;
-    let emissive = material.emissive_factor_metallic.xyz;
+    var emissive = material.emissive_factor_metallic.xyz;
+    if (has_emissive_texture) {
+        emissive *= textureSample(emissiveTexture, mySampler, in.tex_coords).xyz;
+    }
     var color = ambient + direct_lighting + emissive;
     color = color / (color + vec3<f32>(1.0));
     color = pow(color, vec3<f32>(1.0 / 2.2));

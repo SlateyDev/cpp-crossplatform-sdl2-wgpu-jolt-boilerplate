@@ -1,9 +1,15 @@
-# Cross-platform SDL2, WGPU, Jolt boilerplate (C++)
+# Aberrant Engine
 
-This project initializes:
-- **SDL2** for window/canvas creation on both desktop and wasm, can also then be used for input and sound
+Technologies used:
+- **SDL2** for window/canvas creation on both desktop and wasm, can also then be used for input, image loading and sound
 - **WebGPU** (`wgpu-native` on desktop, browser WebGPU via Emscripten for wasm)
-- **Jolt Physics**
+- **Jolt** physics for physics, collision detection and ray-picking
+- **RmlUi** for debug text and dev console
+- **LUA** scripting
+- **Wren** scripting
+- **glm** for math functions
+- **cgltf** for model loading
+- **freetype** for font loading
 
 ## Requirements
 
@@ -72,6 +78,19 @@ Then open `http://localhost:8000/aberrant_engine.html`.
 - **Tab**: Toggle mouse-look mode
 - **Esc**: Exit mouse-look mode
 - **Left click**: Re-enter mouse-look mode (useful in browser builds after pointer-lock restrictions)
+- **Tilde (`~`)**: Toggle developer console
+- **1**: Play `assets/audio/sfx.wav` (supports overlapping playback on multiple channels)
+- **M**: Toggle looping `assets/audio/music.ogg`
+
+## Developer console
+
+- Opens with **tilde (`~`)**
+- Supports:
+  - `print <message>` to print a message in the console
+  - `add <number1> <number2>` to print a numeric sum
+  - `lua <script>` to execute Lua script code (example: `lua print("hello from lua")`)
+  - `wren <script>` to execute Wren script code (example: `wren System.print("hello from wren")`)
+  - `help` to display a list of commands
 
 ## Other build presets
 
