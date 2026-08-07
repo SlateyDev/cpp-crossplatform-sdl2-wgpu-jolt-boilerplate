@@ -53,17 +53,24 @@ fn vs_main(
 
 @group(2) @binding(0) var myTexture: texture_2d<f32>;
 @group(2) @binding(1) var mySampler: sampler;
+@group(2) @binding(2) var metallicRoughnessTexture: texture_2d<f32>;
+struct MaterialParams {
+    base_color_factor: vec4<f32>,
+    emissive_factor_metallic: vec4<f32>,
+    roughness_occlusion_alpha_cutoff_flags: vec4<f32>,
+}
+@group(2) @binding(3) var<uniform> material: MaterialParams;
 
 @group(3) @binding(0) var shadowMap: texture_depth_2d_array;
 @group(3) @binding(1) var shadowSampler: sampler_comparison;
 
-fn get_cascade_index(camera_space_z: f32) -> i32 {
-    for (var i = 0; i < 4; i++) {
+fn get_cascade_index(camera_space_z: f32) -> u32 {
+    for (var i: u32 = 0u; i < 4u; i++) {
         if (camera_space_z < light.cascades[i].split_depth) {
             return i;
         }
     }
-    return 4;
+    return 4u;
 }
 
 override shadowDepthTextureSize: f32 = 2048.0;
@@ -75,63 +82,105 @@ const cascade_colour_modulator: array<vec3<f32>, 4> = array<vec3<f32>, 4>(
     vec3<f32>(1.5, 0.5, 1.5)
 );
 
+fn distribution_ggx(n: vec3<f32>, h: vec3<f32>, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let n_dot_h = max(dot(n, h), 0.0);
+    let n_dot_h2 = n_dot_h * n_dot_h;
+    let denom = (n_dot_h2 * (a2 - 1.0) + 1.0);
+    return a2 / max(3.14159265 * denom * denom, 0.0001);
+}
+
+fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    return n_dot_v / max(n_dot_v * (1.0 - k) + k, 0.0001);
+}
+
+fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f32 {
+    let n_dot_v = max(dot(n, v), 0.0);
+    let n_dot_l = max(dot(n, l), 0.0);
+    return geometry_schlick_ggx(n_dot_v, roughness) * geometry_schlick_ggx(n_dot_l, roughness);
+}
+
+fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
+}
+
 @fragment
 fn fs_main(
     in: VertexOutput,
 ) -> @location(0) vec4<f32> {
-    let light_dir = normalize(light.pos.xyz - in.world_position);
-    let view_dir = normalize(camera.pos.xyz - in.world_position);
-    let half_dir = normalize(view_dir + light_dir);
+    let base_color_sample = textureSample(myTexture, mySampler, in.tex_coords);
+    let base_color = base_color_sample * material.base_color_factor;
+    let material_flags = u32(material.roughness_occlusion_alpha_cutoff_flags.w + 0.5);
+    let is_alpha_mask = (material_flags & 1u) != 0u;
+    let has_metallic_roughness_texture = (material_flags & 2u) != 0u;
+    if (is_alpha_mask && base_color.a < material.roughness_occlusion_alpha_cutoff_flags.z) {
+        discard;
+    }
 
-    let diffuse_strength = max(dot(in.world_normal, light_dir), 0.0);
-    let diffuse_color = diffuse_strength;// * light.color;
+    let metallic_roughness_sample = textureSample(metallicRoughnessTexture, mySampler, in.tex_coords);
+    let metallic_roughness_multiplier = select(vec2<f32>(1.0, 1.0), metallic_roughness_sample.bg, has_metallic_roughness_texture);
+    let roughness = clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_multiplier.x, 0.045, 1.0);
+    let metallic = clamp(material.emissive_factor_metallic.w * metallic_roughness_multiplier.y, 0.0, 1.0);
 
-    let specular_strength = pow(max(dot(in.world_normal, half_dir), 0.0), 32.0);
-    let specular_color = specular_strength;// * light.color;
+    let n = normalize(in.world_normal);
+    let v = normalize(camera.pos.xyz - in.world_position);
+    let l = normalize(light.pos.xyz - in.world_position);
+    let h = normalize(v + l);
+    let n_dot_l = max(dot(n, l), 0.0);
+    let n_dot_v = max(dot(n, v), 0.0);
 
-    let object_color = textureSample(myTexture, mySampler, in.tex_coords);
-
-    let ambient_strength = 0.3;
-    let ambient_color = ambient_strength;// * light.color;
-
-    var result_color = (ambient_color + diffuse_color + specular_color) * object_color.xyz;
+    let albedo = base_color.xyz;
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let ndf = distribution_ggx(n, h, roughness);
+    let g = geometry_smith(n, v, l, roughness);
+    let f = fresnel_schlick(max(dot(h, v), 0.0), f0);
+    let numerator = ndf * g * f;
+    let denominator = max(4.0 * n_dot_v * n_dot_l, 0.0001);
+    let specular = numerator / denominator;
+    let k_d = (vec3<f32>(1.0) - f) * (1.0 - metallic);
+    let diffuse = (k_d * albedo) / 3.14159265;
 
     let camera_to_fragment = in.world_position - camera.pos.xyz;
     let camera_depth = dot(camera_to_fragment, normalize(camera.forward.xyz));
     let cascade_idx = get_cascade_index(camera_depth);
-    
-    let shadowCoord = light.cascades[cascade_idx].view_proj * vec4<f32>(in.world_position, 1.0);
-    let projCoords = shadowCoord.xyz / shadowCoord.w;
-    let shadow_uv = projCoords.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
-    let shadow_depth = projCoords.z;
-
-    if (shadow_uv.x < 0.0 || shadow_uv.x > 1.0 || shadow_uv.y < 0.0 || shadow_uv.y > 1.0 || shadow_depth < 0.0 || shadow_depth > 1.0 || cascade_idx >= 4) {
-        return vec4<f32>(result_color, object_color.a);
-    }
 
     let kernelSize: i32 = 1;
     let weightTotal: f32 = f32(kernelSize * 2 + 1) * f32(kernelSize * 2 + 1);
 
-    // Percentage-closer filtering. Sample texels in the region to smooth the result.
-    var visibility = 0.0;
-    let oneOverShadowDepthTextureSize = 1.0 / shadowDepthTextureSize;
-    for (var y = -kernelSize; y <= kernelSize; y++) {
-        for (var x = -kernelSize; x <= kernelSize; x++) {
-            let offset = vec2<f32>(vec2(x, y)) * oneOverShadowDepthTextureSize;
-            visibility += textureSampleCompareLevel(
-                shadowMap, 
-                shadowSampler,
-                shadow_uv + offset,
-                cascade_idx,  // Layer index
-                shadow_depth - (0.001 + 0.001 * f32(cascade_idx))
-            );
+    var visibility = 1.0;
+    if (cascade_idx < 4u) {
+        let shadowCoord = light.cascades[cascade_idx].view_proj * vec4<f32>(in.world_position, 1.0);
+        let projCoords = shadowCoord.xyz / shadowCoord.w;
+        let shadow_uv = projCoords.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+        let shadow_depth = projCoords.z;
+        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && shadow_depth >= 0.0 && shadow_depth <= 1.0) {
+            visibility = 0.0;
+            let oneOverShadowDepthTextureSize = 1.0 / shadowDepthTextureSize;
+            for (var y = -kernelSize; y <= kernelSize; y++) {
+                for (var x = -kernelSize; x <= kernelSize; x++) {
+                    let offset = vec2<f32>(vec2(x, y)) * oneOverShadowDepthTextureSize;
+                    visibility += textureSampleCompareLevel(
+                        shadowMap,
+                        shadowSampler,
+                        shadow_uv + offset,
+                        cascade_idx,
+                        shadow_depth - (0.001 + 0.001 * f32(cascade_idx))
+                    );
+                }
+            }
+            visibility /= weightTotal;
         }
     }
-    visibility /= weightTotal;
 
-    let lambertian_factor = max(dot(light_dir, in.world_normal), 0.0);
-    let lighting_factor = min(ambient_color + visibility * lambertian_factor, 1.0);
+    let direct_lighting = (diffuse + specular) * n_dot_l * visibility;
+    let ambient = vec3<f32>(0.03) * albedo * material.roughness_occlusion_alpha_cutoff_flags.y;
+    let emissive = material.emissive_factor_metallic.xyz;
+    var color = ambient + direct_lighting + emissive;
+    color = color / (color + vec3<f32>(1.0));
+    color = pow(color, vec3<f32>(1.0 / 2.2));
 
-//    return vec4<f32>(lighting_factor * result_color * cascade_colour_modulator[cascade_idx], object_color.a);
-    return vec4<f32>(lighting_factor * result_color, object_color.a);
+    return vec4<f32>(color, base_color.a);
 }

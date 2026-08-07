@@ -15,7 +15,16 @@ struct UnlitMaterial {
     int id;
     WGPUTexture baseColorTexture;
     WGPUTextureView baseColorTextureView;
+    WGPUTexture metallicRoughnessTexture;
+    WGPUTextureView metallicRoughnessTextureView;
+    WGPUBuffer pbrParamsBuffer;
     WGPUBindGroup bindGroup;
+};
+
+struct alignas(16) PbrMaterialUniform {
+    glm::vec4 baseColorFactor = glm::vec4(1.0f);
+    glm::vec4 emissiveFactorMetallic = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    glm::vec4 roughnessOcclusionAlphaCutoffFlags = glm::vec4(1.0f, 1.0f, 0.5f, 0.0f);
 };
 
 struct GpuState {

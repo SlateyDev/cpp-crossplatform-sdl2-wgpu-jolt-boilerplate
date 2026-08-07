@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
 #include <vector>
 
 #include "structures.hpp"
@@ -109,6 +110,61 @@ bool ReadIndices(const cgltf_accessor *accessor, std::vector<int> &output)
     }
 
     return true;
+}
+
+std::string GetMaterialKey(const cgltf_material *material, const cgltf_data *data)
+{
+    if (material == nullptr) {
+        return "sample.png";
+    }
+    if (material->name != nullptr && material->name[0] != '\0') {
+        return material->name;
+    }
+    const auto materialIndex = static_cast<size_t>(material - data->materials);
+    return "__gltf_material_" + std::to_string(materialIndex);
+}
+
+bool CreateSolidTexture(
+    const GpuState &gpuState,
+    const std::array<uint8_t, 4> &bgra,
+    WGPUTexture &outTexture,
+    WGPUTextureView &outTextureView
+)
+{
+    const WGPUTextureDescriptor desc{
+        .label = {"Fallback Solid Texture", WGPU_STRLEN},
+        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst,
+        .dimension = WGPUTextureDimension_2D,
+        .size = {1, 1, 1},
+        .format = WGPUTextureFormat_BGRA8Unorm,
+        .mipLevelCount = 1,
+        .sampleCount = 1,
+    };
+    outTexture = wgpuDeviceCreateTexture(gpuState.device, &desc);
+    if (outTexture == nullptr) {
+        return false;
+    }
+
+    const WGPUTexelCopyTextureInfo destination{
+        .texture = outTexture,
+        .mipLevel = 0,
+        .origin = {0, 0, 0},
+        .aspect = WGPUTextureAspect_All,
+    };
+    const WGPUTexelCopyBufferLayout dataLayout{
+        .offset = 0,
+        .bytesPerRow = 4,
+        .rowsPerImage = 1,
+    };
+    const WGPUExtent3D writeSize{
+        .width = 1,
+        .height = 1,
+        .depthOrArrayLayers = 1,
+    };
+    wgpuQueueWriteTexture(gpuState.queue, &destination, bgra.data(), bgra.size(), &dataLayout, &writeSize);
+
+    outTextureView = wgpuTextureCreateView(outTexture, nullptr);
+    return outTextureView != nullptr;
 }
 
 } // namespace
@@ -217,62 +273,138 @@ bool LoadGltfPrimitives(
                 };
             }
 
-            if (primitive.material->pbr_metallic_roughness.base_color_texture.texture == nullptr) {
-                parsedPrimitives.push_back(Primitive::CreateFromPremadeData(gpuState.device, vertices, indices, "sample.png"));
-            } else {
-                parsedPrimitives.push_back(Primitive::CreateFromPremadeData(gpuState.device, vertices, indices, primitive.material->name));
-            }
+            parsedPrimitives.push_back(Primitive::CreateFromPremadeData(
+                gpuState.device,
+                vertices,
+                indices,
+                GetMaterialKey(primitive.material, data)
+            ));
         }
+    }
+
+    WGPUTexture fallbackWhiteTexture = nullptr;
+    WGPUTextureView fallbackWhiteTextureView = nullptr;
+    if (!CreateSolidTexture(gpuState, {255, 255, 255, 255}, fallbackWhiteTexture, fallbackWhiteTextureView)) {
+        outError = "Failed to create fallback white texture.";
+        cgltf_free(data);
+        return false;
     }
 
     for (cgltf_size materialIndex = 0; materialIndex < data->materials_count; ++materialIndex) {
         const auto &material = data->materials[materialIndex];
-
+        WGPUTexture baseColorTexture = fallbackWhiteTexture;
+        WGPUTextureView baseColorTextureView = fallbackWhiteTextureView;
         if (material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
-            const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
+            const auto *image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             if (image == nullptr || image->uri == nullptr) {
                 outError = "Material base color texture is missing image URI.";
                 cgltf_free(data);
                 return false;
             }
-
             std::string textureLoadError;
-            const auto materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
+            const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
             if (!materialTexture) {
                 outError = textureLoadError.empty() ? "Failed to load material texture." : textureLoadError;
                 cgltf_free(data);
                 return false;
             }
-
-            const auto bindGroupEntries = std::to_array<WGPUBindGroupEntry>({
-                {.binding = 0, .textureView = materialTexture->getTextureView()},
-                {.binding = 1, .sampler = gpuState.defaultSampler},
-                // {binding = 2, textureView = normalTextureView},
-                // {binding = 3, sampler = normalSampler},
-                // {binding = 4, textureView = metallicRoughnessTextureView},
-                // {binding = 5, sampler = metallicRoughnessSampler},
-                // {binding = 6, textureView = emissiveTextureView},
-                // {binding = 7, sampler = emissiveSampler},
-                // {binding = 8, textureView = occlusionTextureView},
-                // {binding = 9, sampler = occlusionSampler},
-            });
-            const WGPUBindGroupDescriptor bindGroupDesc {
-                .label = "Bind Group",
-                .layout = gpuState.defaultSamplerBindGroupLayout,
-                .entryCount = bindGroupEntries.size(),
-                .entries = bindGroupEntries.data(),
-            };
-
-            const auto newBindGroup = wgpuDeviceCreateBindGroup(
-                gpuState.device,
-                &bindGroupDesc);
-
-            materials[material.name] = UnlitMaterial{
-                .baseColorTexture = materialTexture->getTexture(),
-                .baseColorTextureView = materialTexture->getTextureView(),
-                .bindGroup = newBindGroup,
-            };
+            baseColorTexture = materialTexture->getTexture();
+            baseColorTextureView = materialTexture->getTextureView();
         }
+
+        WGPUTexture metallicRoughnessTexture = fallbackWhiteTexture;
+        WGPUTextureView metallicRoughnessTextureView = fallbackWhiteTextureView;
+        bool hasMetallicRoughnessTexture = false;
+        if (material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr) {
+            const auto *image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
+            if (image == nullptr || image->uri == nullptr) {
+                outError = "Material metallic-roughness texture is missing image URI.";
+                cgltf_free(data);
+                return false;
+            }
+            std::string textureLoadError;
+            const auto *materialTexture = assetManager.RequestTexture(image->uri, textureLoadError);
+            if (!materialTexture) {
+                outError = textureLoadError.empty() ? "Failed to load metallic-roughness texture." : textureLoadError;
+                cgltf_free(data);
+                return false;
+            }
+            metallicRoughnessTexture = materialTexture->getTexture();
+            metallicRoughnessTextureView = materialTexture->getTextureView();
+            hasMetallicRoughnessTexture = true;
+        }
+
+        const float occlusionStrength = material.occlusion_texture.texture == nullptr ? 1.0f : material.occlusion_texture.scale;
+        const auto flags = static_cast<float>(
+            (material.alpha_mode == cgltf_alpha_mode_mask ? 1u : 0u) |
+            (hasMetallicRoughnessTexture ? 2u : 0u)
+        );
+        const PbrMaterialUniform pbrMaterialUniform{
+            .baseColorFactor = glm::vec4(
+                material.pbr_metallic_roughness.base_color_factor[0],
+                material.pbr_metallic_roughness.base_color_factor[1],
+                material.pbr_metallic_roughness.base_color_factor[2],
+                material.pbr_metallic_roughness.base_color_factor[3]
+            ),
+            .emissiveFactorMetallic = glm::vec4(
+                material.emissive_factor[0],
+                material.emissive_factor[1],
+                material.emissive_factor[2],
+                material.pbr_metallic_roughness.metallic_factor
+            ),
+            .roughnessOcclusionAlphaCutoffFlags = glm::vec4(
+                material.pbr_metallic_roughness.roughness_factor,
+                occlusionStrength,
+                material.alpha_cutoff,
+                flags
+            ),
+        };
+
+        const WGPUBufferDescriptor pbrParamsBufferDesc{
+            .label = {"PBR Material Uniform Buffer", WGPU_STRLEN},
+            .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
+            .size = sizeof(PbrMaterialUniform),
+        };
+        const auto pbrParamsBuffer = wgpuDeviceCreateBuffer(gpuState.device, &pbrParamsBufferDesc);
+        if (pbrParamsBuffer == nullptr) {
+            outError = "Failed to create PBR material uniform buffer.";
+            cgltf_free(data);
+            return false;
+        }
+        wgpuQueueWriteBuffer(gpuState.queue, pbrParamsBuffer, 0, &pbrMaterialUniform, sizeof(PbrMaterialUniform));
+
+        const auto bindGroupEntries = std::to_array<WGPUBindGroupEntry>({
+            WGPUBindGroupEntry{.binding = 0, .textureView = baseColorTextureView},
+            WGPUBindGroupEntry{.binding = 1, .sampler = gpuState.defaultSampler},
+            WGPUBindGroupEntry{.binding = 2, .textureView = metallicRoughnessTextureView},
+            WGPUBindGroupEntry{
+                .binding = 3,
+                .buffer = pbrParamsBuffer,
+                .size = sizeof(PbrMaterialUniform),
+            },
+        });
+        const WGPUBindGroupDescriptor bindGroupDesc{
+            .label = {"Material Bind Group", WGPU_STRLEN},
+            .layout = gpuState.defaultSamplerBindGroupLayout,
+            .entryCount = static_cast<uint32_t>(bindGroupEntries.size()),
+            .entries = bindGroupEntries.data(),
+        };
+
+        const auto newBindGroup = wgpuDeviceCreateBindGroup(gpuState.device, &bindGroupDesc);
+        if (newBindGroup == nullptr) {
+            outError = "Failed to create material bind group.";
+            cgltf_free(data);
+            return false;
+        }
+
+        materials[GetMaterialKey(&material, data)] = UnlitMaterial{
+            .baseColorTexture = baseColorTexture,
+            .baseColorTextureView = baseColorTextureView,
+            .metallicRoughnessTexture = metallicRoughnessTexture,
+            .metallicRoughnessTextureView = metallicRoughnessTextureView,
+            .pbrParamsBuffer = pbrParamsBuffer,
+            .bindGroup = newBindGroup,
+        };
     }
 
     cgltf_free(data);

@@ -646,6 +646,22 @@ bool ConfigureSurface(AppState &app)
                     .type = WGPUSamplerBindingType_Filtering,
                 },
             },
+            WGPUBindGroupLayoutEntry{
+                .binding = 2,
+                .visibility = WGPUShaderStage_Fragment,
+                .texture = WGPUTextureBindingLayout{
+                    .sampleType = WGPUTextureSampleType_Float,
+                    .viewDimension = WGPUTextureViewDimension_2D,
+                    .multisampled = false,
+                },
+            },
+            WGPUBindGroupLayoutEntry{
+                .binding = 3,
+                .visibility = WGPUShaderStage_Fragment,
+                .buffer = WGPUBufferBindingLayout{
+                    .type = WGPUBufferBindingType_Uniform,
+                },
+            },
         });
         const WGPUBindGroupLayoutDescriptor desc{
             .label = ToWgpuString("Default Sampler Bind Group Layout"),
@@ -1616,10 +1632,30 @@ int main()
 
     const auto texture = sampleTexture->getTexture();
     const auto textureView = sampleTexture->getTextureView();
+    const PbrMaterialUniform sampleMaterialParams{
+        .baseColorFactor = glm::vec4(1.0f),
+        .emissiveFactorMetallic = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
+        .roughnessOcclusionAlphaCutoffFlags = glm::vec4(1.0f, 1.0f, 0.5f, 0.0f),
+    };
+    const WGPUBufferDescriptor sampleMaterialBufferDesc{
+        .label = ToWgpuString("Sample Material Uniform Buffer"),
+        .usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst,
+        .size = sizeof(PbrMaterialUniform),
+    };
+    const auto sampleMaterialBuffer = wgpuDeviceCreateBuffer(app.gpu.device, &sampleMaterialBufferDesc);
+    if (!sampleMaterialBuffer) {
+        std::cerr << "Failed to create sample material uniform buffer\n";
+        return 1;
+    }
+    wgpuQueueWriteBuffer(app.gpu.queue, sampleMaterialBuffer, 0, &sampleMaterialParams, sizeof(PbrMaterialUniform));
+
     materials["sample.png"] = UnlitMaterial{
         .id = 0,
         .baseColorTexture = texture,
         .baseColorTextureView = textureView,
+        .metallicRoughnessTexture = texture,
+        .metallicRoughnessTextureView = textureView,
+        .pbrParamsBuffer = sampleMaterialBuffer,
         .bindGroup = [&] {
             const auto entries = std::to_array<WGPUBindGroupEntry>({
                 WGPUBindGroupEntry{
@@ -1629,6 +1665,15 @@ int main()
                 WGPUBindGroupEntry{
                     .binding = 1,
                     .sampler = app.gpu.defaultSampler,
+                },
+                WGPUBindGroupEntry{
+                    .binding = 2,
+                    .textureView = textureView,
+                },
+                WGPUBindGroupEntry{
+                    .binding = 3,
+                    .buffer = sampleMaterialBuffer,
+                    .size = sizeof(PbrMaterialUniform),
                 },
             });
             const WGPUBindGroupDescriptor desc{
@@ -1839,6 +1884,17 @@ int main()
             if (primitive.indexBuffer) {
                 wgpuBufferRelease(primitive.indexBuffer);
             }
+        }
+    }
+
+    for (auto &[_, material] : materials) {
+        if (material.bindGroup) {
+            wgpuBindGroupRelease(material.bindGroup);
+            material.bindGroup = nullptr;
+        }
+        if (material.pbrParamsBuffer) {
+            wgpuBufferRelease(material.pbrParamsBuffer);
+            material.pbrParamsBuffer = nullptr;
         }
     }
 
