@@ -53,6 +53,8 @@ private:
 bool NavMeshRuntime::Build(const std::vector<float> &vertices, const std::vector<int> &indices)
 {
     Reset();
+    debugVertices.clear();
+    debugIndices.clear();
 
     if (vertices.size() < 9 || indices.size() < 3 || (vertices.size() % 3) != 0 || (indices.size() % 3) != 0) {
         status = "NavMesh: Invalid source geometry";
@@ -267,6 +269,35 @@ bool NavMeshRuntime::Build(const std::vector<float> &vertices, const std::vector
         }
     }
 
+    debugVertices.reserve(static_cast<size_t>(polyMesh->nverts) * 3);
+    for (int vertexIndex = 0; vertexIndex < polyMesh->nverts; ++vertexIndex) {
+        const unsigned short x = polyMesh->verts[vertexIndex * 3];
+        const unsigned short y = polyMesh->verts[(vertexIndex * 3) + 1];
+        const unsigned short z = polyMesh->verts[(vertexIndex * 3) + 2];
+        debugVertices.push_back(polyMesh->bmin[0] + (static_cast<float>(x) * config.cs));
+        debugVertices.push_back(polyMesh->bmin[1] + (static_cast<float>(y) * config.ch));
+        debugVertices.push_back(polyMesh->bmin[2] + (static_cast<float>(z) * config.cs));
+    }
+
+    debugIndices.reserve(static_cast<size_t>(polyMesh->npolys) * static_cast<size_t>(polyMesh->nvp - 2) * 3);
+    for (int polygonIndex = 0; polygonIndex < polyMesh->npolys; ++polygonIndex) {
+        const unsigned short *polygon = &polyMesh->polys[polygonIndex * 2 * polyMesh->nvp];
+        int polygonVertexCount = 0;
+        while (polygonVertexCount < polyMesh->nvp && polygon[polygonVertexCount] != RC_MESH_NULL_IDX) {
+            ++polygonVertexCount;
+        }
+        if (polygonVertexCount < 3) {
+            continue;
+        }
+
+        const int root = static_cast<int>(polygon[0]);
+        for (int vertex = 1; vertex + 1 < polygonVertexCount; ++vertex) {
+            debugIndices.push_back(root);
+            debugIndices.push_back(static_cast<int>(polygon[vertex]));
+            debugIndices.push_back(static_cast<int>(polygon[vertex + 1]));
+        }
+    }
+
     dtNavMeshCreateParams params{};
     params.verts = polyMesh->verts;
     params.vertCount = polyMesh->nverts;
@@ -357,6 +388,16 @@ std::string NavMeshRuntime::GetStatus() const
     return status;
 }
 
+const std::vector<float> &NavMeshRuntime::GetDebugVertices() const
+{
+    return debugVertices;
+}
+
+const std::vector<int> &NavMeshRuntime::GetDebugIndices() const
+{
+    return debugIndices;
+}
+
 bool NavMeshRuntime::FindPath(const glm::vec3 &start, const glm::vec3 &end, std::vector<glm::vec3> &outPath) const
 {
     outPath.clear();
@@ -432,6 +473,9 @@ std::array<float, 3> NavMeshRuntime::ToDetourVector(const glm::vec3 &value)
 
 void NavMeshRuntime::Reset()
 {
+    debugVertices.clear();
+    debugIndices.clear();
+
     if (navQuery != nullptr) {
         dtFreeNavMeshQuery(navQuery);
         navQuery = nullptr;

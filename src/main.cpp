@@ -2449,7 +2449,7 @@ int main()
     }
     navMeshDebugText = navMesh.GetStatus();
     PushDebugMessage("Recast/Detour navmesh initialized");
-    InitializeNavDebugObjects(navMeshVertices, navMeshIndices);
+    InitializeNavDebugObjects(navMesh.GetDebugVertices(), navMesh.GetDebugIndices());
     PushDebugMessage("Navmesh and nav path debug visualization enabled");
     activeNavMeshRuntime = &navMesh;
 
