@@ -5,7 +5,6 @@
 
 #include <array>
 #include <climits>
-#include <cstdint>
 #include <vector>
 
 #include "structures.hpp"
@@ -124,49 +123,6 @@ std::string GetMaterialKey(const cgltf_material *material, const cgltf_data *dat
     return "__gltf_material_" + std::to_string(materialIndex);
 }
 
-bool CreateSolidTexture(
-    const GpuState &gpuState,
-    const std::array<uint8_t, 4> &bgra,
-    WGPUTexture &outTexture,
-    WGPUTextureView &outTextureView
-)
-{
-    const WGPUTextureDescriptor desc{
-        .label = {"Fallback Solid Texture", WGPU_STRLEN},
-        .usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst,
-        .dimension = WGPUTextureDimension_2D,
-        .size = {1, 1, 1},
-        .format = WGPUTextureFormat_BGRA8Unorm,
-        .mipLevelCount = 1,
-        .sampleCount = 1,
-    };
-    outTexture = wgpuDeviceCreateTexture(gpuState.device, &desc);
-    if (outTexture == nullptr) {
-        return false;
-    }
-
-    const WGPUTexelCopyTextureInfo destination{
-        .texture = outTexture,
-        .mipLevel = 0,
-        .origin = {0, 0, 0},
-        .aspect = WGPUTextureAspect_All,
-    };
-    const WGPUTexelCopyBufferLayout dataLayout{
-        .offset = 0,
-        .bytesPerRow = 4,
-        .rowsPerImage = 1,
-    };
-    const WGPUExtent3D writeSize{
-        .width = 1,
-        .height = 1,
-        .depthOrArrayLayers = 1,
-    };
-    wgpuQueueWriteTexture(gpuState.queue, &destination, bgra.data(), bgra.size(), &dataLayout, &writeSize);
-
-    outTextureView = wgpuTextureCreateView(outTexture, nullptr);
-    return outTextureView != nullptr;
-}
-
 } // namespace
 
 bool LoadGltfPrimitives(
@@ -282,18 +238,18 @@ bool LoadGltfPrimitives(
         }
     }
 
-    WGPUTexture fallbackWhiteTexture = nullptr;
-    WGPUTextureView fallbackWhiteTextureView = nullptr;
-    if (!CreateSolidTexture(gpuState, {255, 255, 255, 255}, fallbackWhiteTexture, fallbackWhiteTextureView)) {
-        outError = "Failed to create fallback white texture.";
+    std::string fallbackTextureError;
+    const auto *fallbackTexture = assetManager.RequestTexture("sample.png", fallbackTextureError);
+    if (fallbackTexture == nullptr) {
+        outError = fallbackTextureError.empty() ? "Failed to load fallback texture sample.png." : fallbackTextureError;
         cgltf_free(data);
         return false;
     }
 
     for (cgltf_size materialIndex = 0; materialIndex < data->materials_count; ++materialIndex) {
         const auto &material = data->materials[materialIndex];
-        WGPUTexture baseColorTexture = fallbackWhiteTexture;
-        WGPUTextureView baseColorTextureView = fallbackWhiteTextureView;
+        WGPUTexture baseColorTexture = fallbackTexture->getTexture();
+        WGPUTextureView baseColorTextureView = fallbackTexture->getTextureView();
         if (material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
             const auto *image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             if (image == nullptr || image->uri == nullptr) {
@@ -312,8 +268,8 @@ bool LoadGltfPrimitives(
             baseColorTextureView = materialTexture->getTextureView();
         }
 
-        WGPUTexture metallicRoughnessTexture = fallbackWhiteTexture;
-        WGPUTextureView metallicRoughnessTextureView = fallbackWhiteTextureView;
+        WGPUTexture metallicRoughnessTexture = fallbackTexture->getTexture();
+        WGPUTextureView metallicRoughnessTextureView = fallbackTexture->getTextureView();
         bool hasMetallicRoughnessTexture = false;
         if (material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr) {
             const auto *image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;

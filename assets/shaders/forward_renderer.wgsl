@@ -121,7 +121,7 @@ fn fs_main(
     }
 
     let metallic_roughness_sample = textureSample(metallicRoughnessTexture, mySampler, in.tex_coords);
-    let metallic_roughness_multiplier = select(vec2<f32>(1.0, 1.0), metallic_roughness_sample.bg, has_metallic_roughness_texture);
+    let metallic_roughness_multiplier = select(vec2<f32>(1.0, 1.0), metallic_roughness_sample.gb, has_metallic_roughness_texture);
     let roughness = clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_multiplier.x, 0.045, 1.0);
     let metallic = clamp(material.emissive_factor_metallic.w * metallic_roughness_multiplier.y, 0.0, 1.0);
 
@@ -166,7 +166,7 @@ fn fs_main(
                         shadowMap,
                         shadowSampler,
                         shadow_uv + offset,
-                        cascade_idx,
+                        i32(cascade_idx),
                         shadow_depth - (0.001 + 0.001 * f32(cascade_idx))
                     );
                 }
