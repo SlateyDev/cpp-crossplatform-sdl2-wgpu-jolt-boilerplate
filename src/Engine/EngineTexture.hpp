@@ -1,6 +1,7 @@
 #ifndef ABERRANT_ENGINE_ENGINETEXTURE_HPP
 #define ABERRANT_ENGINE_ENGINETEXTURE_HPP
 
+#include <cstdint>
 #include <string>
 #include <webgpu/webgpu.h>
 #include <SDL_image.h>
@@ -14,6 +15,7 @@ class EngineTexture {
 
 public:
     bool LoadImage(const std::string& fileName);
+    bool LoadSolidColor(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a);
     ~EngineTexture();
 
     bool CreateTextureAndView(WGPUDevice device, WGPUQueue queue);

@@ -23,6 +23,22 @@ bool EngineTexture::LoadImage(const std::string& fileName) {
     return true;
 }
 
+bool EngineTexture::LoadSolidColor(const std::uint8_t r, const std::uint8_t g, const std::uint8_t b, const std::uint8_t a)
+{
+    fileName.clear();
+
+    SDL_Surface* solidSurface = SDL_CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_BGRA32);
+    if (!solidSurface) {
+        std::cerr << "Failed to create solid color texture surface. Error: " << SDL_GetError() << std::endl;
+        return false;
+    }
+
+    const Uint32 pixel = SDL_MapRGBA(solidSurface->format, r, g, b, a);
+    *static_cast<Uint32*>(solidSurface->pixels) = pixel;
+    surface = solidSurface;
+    return true;
+}
+
 EngineTexture::~EngineTexture() {
     if (texture) wgpuTextureRelease(texture);
     texture = nullptr;

@@ -139,9 +139,16 @@ fn fs_main(
     }
 
     let metallic_roughness_sample = textureSample(metallicRoughnessTexture, mySampler, in.tex_coords);
-    let metallic_roughness_multiplier = select(vec2<f32>(1.0, 1.0), metallic_roughness_sample.gb, has_metallic_roughness_texture);
-    let roughness = clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_multiplier.x, 0.045, 1.0);
-    let metallic = clamp(material.emissive_factor_metallic.w * metallic_roughness_multiplier.y, 0.0, 1.0);
+    let roughness = select(
+        1.0,
+        clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_sample.g, 0.045, 1.0),
+        has_metallic_roughness_texture
+    );
+    let metallic = select(
+        0.0,
+        clamp(material.emissive_factor_metallic.w * metallic_roughness_sample.b, 0.0, 1.0),
+        has_metallic_roughness_texture
+    );
 
     var n = normalize(in.world_normal);
     if (has_normal_texture) {
@@ -199,9 +206,9 @@ fn fs_main(
 
     let direct_lighting = (diffuse + specular) * n_dot_l * visibility;
     let ambient = vec3<f32>(0.03) * albedo * material.roughness_occlusion_alpha_cutoff_flags.y;
-    var emissive = material.emissive_factor_metallic.xyz;
+    var emissive = vec3<f32>(0.0);
     if (has_emissive_texture) {
-        emissive *= textureSample(emissiveTexture, mySampler, in.tex_coords).xyz;
+        emissive = material.emissive_factor_metallic.xyz * textureSample(emissiveTexture, mySampler, in.tex_coords).xyz;
     }
     var color = ambient + direct_lighting + emissive;
     color = color / (color + vec3<f32>(1.0));

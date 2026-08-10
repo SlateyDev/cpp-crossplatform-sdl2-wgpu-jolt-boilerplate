@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
 #include <vector>
 
 #include "structures.hpp"
@@ -12,7 +13,10 @@
 
 namespace {
 
-constexpr const char *kFallbackMaterialKey = "sample.png";
+constexpr const char *kFallbackMaterialKey = "__fallback__/base_color";
+constexpr const char *kFallbackMetallicRoughnessKey = "__fallback__/metallic_roughness";
+constexpr const char *kFallbackNormalKey = "__fallback__/normal";
+constexpr const char *kFallbackEmissiveKey = "__fallback__/emissive";
 
 const char *CgltfResultToString(const cgltf_result result)
 {
@@ -255,17 +259,39 @@ bool LoadGltfPrimitives(
     }
 
     std::string fallbackTextureError;
-    const auto *fallbackTexture = assetManager.RequestTexture(kFallbackMaterialKey, fallbackTextureError);
-    if (fallbackTexture == nullptr) {
-        outError = fallbackTextureError.empty() ? "Failed to load fallback texture sample.png." : fallbackTextureError;
+    const auto *fallbackBaseColorTexture = assetManager.RequestSolidColorTexture(
+        kFallbackMaterialKey, std::array<std::uint8_t, 4>{128u, 128u, 128u, 255u}, fallbackTextureError);
+    if (fallbackBaseColorTexture == nullptr) {
+        outError = fallbackTextureError.empty() ? "Failed to create fallback base color texture." : fallbackTextureError;
+        cgltf_free(data);
+        return false;
+    }
+    const auto *fallbackMetallicRoughnessTexture = assetManager.RequestSolidColorTexture(
+        kFallbackMetallicRoughnessKey, std::array<std::uint8_t, 4>{0u, 255u, 0u, 255u}, fallbackTextureError);
+    if (fallbackMetallicRoughnessTexture == nullptr) {
+        outError = fallbackTextureError.empty() ? "Failed to create fallback metallic-roughness texture." : fallbackTextureError;
+        cgltf_free(data);
+        return false;
+    }
+    const auto *fallbackNormalTexture = assetManager.RequestSolidColorTexture(
+        kFallbackNormalKey, std::array<std::uint8_t, 4>{128u, 128u, 255u, 255u}, fallbackTextureError);
+    if (fallbackNormalTexture == nullptr) {
+        outError = fallbackTextureError.empty() ? "Failed to create fallback normal texture." : fallbackTextureError;
+        cgltf_free(data);
+        return false;
+    }
+    const auto *fallbackEmissiveTexture = assetManager.RequestSolidColorTexture(
+        kFallbackEmissiveKey, std::array<std::uint8_t, 4>{0u, 0u, 0u, 255u}, fallbackTextureError);
+    if (fallbackEmissiveTexture == nullptr) {
+        outError = fallbackTextureError.empty() ? "Failed to create fallback emissive texture." : fallbackTextureError;
         cgltf_free(data);
         return false;
     }
 
     for (cgltf_size materialIndex = 0; materialIndex < data->materials_count; ++materialIndex) {
         const auto &material = data->materials[materialIndex];
-        WGPUTexture baseColorTexture = fallbackTexture->getTexture();
-        WGPUTextureView baseColorTextureView = fallbackTexture->getTextureView();
+        WGPUTexture baseColorTexture = fallbackBaseColorTexture->getTexture();
+        WGPUTextureView baseColorTextureView = fallbackBaseColorTexture->getTextureView();
         if (material.pbr_metallic_roughness.base_color_texture.texture != nullptr) {
             const auto *image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             if (image == nullptr || image->uri == nullptr) {
@@ -286,8 +312,8 @@ bool LoadGltfPrimitives(
             baseColorTextureView = materialTexture->getTextureView();
         }
 
-        WGPUTexture metallicRoughnessTexture = fallbackTexture->getTexture();
-        WGPUTextureView metallicRoughnessTextureView = fallbackTexture->getTextureView();
+        WGPUTexture metallicRoughnessTexture = fallbackMetallicRoughnessTexture->getTexture();
+        WGPUTextureView metallicRoughnessTextureView = fallbackMetallicRoughnessTexture->getTextureView();
         bool hasMetallicRoughnessTexture = false;
         if (material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr) {
             const auto *image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
@@ -310,8 +336,8 @@ bool LoadGltfPrimitives(
             hasMetallicRoughnessTexture = true;
         }
 
-        WGPUTexture normalTexture = fallbackTexture->getTexture();
-        WGPUTextureView normalTextureView = fallbackTexture->getTextureView();
+        WGPUTexture normalTexture = fallbackNormalTexture->getTexture();
+        WGPUTextureView normalTextureView = fallbackNormalTexture->getTextureView();
         bool hasNormalTexture = false;
         if (material.normal_texture.texture != nullptr) {
             const auto *image = material.normal_texture.texture->image;
@@ -334,8 +360,8 @@ bool LoadGltfPrimitives(
             hasNormalTexture = true;
         }
 
-        WGPUTexture emissiveTexture = fallbackTexture->getTexture();
-        WGPUTextureView emissiveTextureView = fallbackTexture->getTextureView();
+        WGPUTexture emissiveTexture = fallbackEmissiveTexture->getTexture();
+        WGPUTextureView emissiveTextureView = fallbackEmissiveTexture->getTextureView();
         bool hasEmissiveTexture = false;
         if (material.emissive_texture.texture != nullptr) {
             const auto *image = material.emissive_texture.texture->image;

@@ -114,3 +114,52 @@ const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::
         return loadedTexture;
     }
 }
+
+const EngineTexture* AssetManager::RequestSolidColorTexture(
+    const std::string& key,
+    const std::array<std::uint8_t, 4>& rgba,
+    std::string& outError)
+{
+    outError.clear();
+
+    {
+        std::shared_lock readLock(mapMutex);
+        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, key)) {
+            return existingTexture;
+        }
+    }
+
+    auto texture = std::make_unique<EngineTexture>();
+    if (!texture->LoadSolidColor(rgba[0], rgba[1], rgba[2], rgba[3])) {
+        outError = "Failed to create solid color image for key: " + key;
+        return {};
+    }
+    if (!texture->CreateTextureAndView(device, queue)) {
+        outError = "Failed to create GPU texture from solid color for key: " + key;
+        return {};
+    }
+
+    {
+        std::unique_lock writeLock(mapMutex);
+        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, key)) {
+            return existingTexture;
+        }
+
+        const AssetId assetId = FindAvailableTextureAssetId(assets, MakeAssetId(key, AssetType::Texture), key);
+
+        auto record = std::make_unique<AssetRecord<std::unique_ptr<EngineTexture>>>();
+        record->id = assetId;
+        record->type = AssetType::Texture;
+        record->path = key;
+        record->resource = std::move(texture);
+        record->hasResource = true;
+        record->state.store(AssetState::Ready, std::memory_order_release);
+        record->generation = 1;
+
+        const EngineTexture* loadedTexture = record->resource.get();
+        assets[assetId] = std::move(record);
+        pathToId[key] = assetId;
+
+        return loadedTexture;
+    }
+}
