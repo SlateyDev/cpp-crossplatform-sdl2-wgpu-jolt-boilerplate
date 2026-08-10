@@ -132,11 +132,11 @@ const EngineTexture* AssetManager::RequestSolidColorTexture(
     auto texture = std::make_unique<EngineTexture>();
     if (!texture->LoadSolidColor(rgba[0], rgba[1], rgba[2], rgba[3])) {
         outError = "Failed to create solid color image for key: " + key;
-        return {};
+        return nullptr;
     }
     if (!texture->CreateTextureAndView(device, queue)) {
         outError = "Failed to create GPU texture from solid color for key: " + key;
-        return {};
+        return nullptr;
     }
 
     {
