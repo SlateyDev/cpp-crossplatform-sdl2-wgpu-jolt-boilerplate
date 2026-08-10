@@ -2812,6 +2812,54 @@ int main()
 
     const auto texture = sampleTexture->getTexture();
     const auto textureView = sampleTexture->getTextureView();
+    const auto neutralMetallicRoughnessTexture = assetManager.RequestSolidColorTexture(
+        "__fallback__/metallic_roughness",
+        std::array<std::uint8_t, 4>{0u, 255u, 0u, 255u},
+        sampleTextureError
+    );
+    if (!neutralMetallicRoughnessTexture) {
+        PushDebugMessage("Failed to create default metallic-roughness texture: " + sampleTextureError, true);
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
+        return 1;
+    }
+
+    const auto neutralNormalTexture = assetManager.RequestSolidColorTexture(
+        "__fallback__/normal",
+        std::array<std::uint8_t, 4>{128u, 128u, 255u, 255u},
+        sampleTextureError
+    );
+    if (!neutralNormalTexture) {
+        PushDebugMessage("Failed to create default normal texture: " + sampleTextureError, true);
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
+        return 1;
+    }
+
+    const auto neutralEmissiveTexture = assetManager.RequestSolidColorTexture(
+        "__fallback__/emissive",
+        std::array<std::uint8_t, 4>{0u, 0u, 0u, 255u},
+        sampleTextureError
+    );
+    if (!neutralEmissiveTexture) {
+        PushDebugMessage("Failed to create default emissive texture: " + sampleTextureError, true);
+        if (overlayState.rmlOverlay) {
+            overlayState.rmlOverlay->Shutdown();
+            overlayState.rmlOverlay.reset();
+        }
+        return 1;
+    }
+
+    const auto neutralMetallicRoughnessTextureHandle = neutralMetallicRoughnessTexture->getTexture();
+    const auto neutralMetallicRoughnessTextureView = neutralMetallicRoughnessTexture->getTextureView();
+    const auto neutralNormalTextureHandle = neutralNormalTexture->getTexture();
+    const auto neutralNormalTextureView = neutralNormalTexture->getTextureView();
+    const auto neutralEmissiveTextureHandle = neutralEmissiveTexture->getTexture();
+    const auto neutralEmissiveTextureView = neutralEmissiveTexture->getTextureView();
     const PbrMaterialUniform sampleMaterialParams{
         .baseColorFactor = glm::vec4(1.0f),
         .emissiveFactorMetallic = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
@@ -2833,12 +2881,12 @@ int main()
         .id = 0,
         .baseColorTexture = texture,
         .baseColorTextureView = textureView,
-        .metallicRoughnessTexture = texture,
-        .metallicRoughnessTextureView = textureView,
-        .normalTexture = texture,
-        .normalTextureView = textureView,
-        .emissiveTexture = texture,
-        .emissiveTextureView = textureView,
+        .metallicRoughnessTexture = neutralMetallicRoughnessTextureHandle,
+        .metallicRoughnessTextureView = neutralMetallicRoughnessTextureView,
+        .normalTexture = neutralNormalTextureHandle,
+        .normalTextureView = neutralNormalTextureView,
+        .emissiveTexture = neutralEmissiveTextureHandle,
+        .emissiveTextureView = neutralEmissiveTextureView,
         .pbrParamsBuffer = sampleMaterialBuffer,
         .bindGroup = [&] {
             const auto entries = std::to_array<WGPUBindGroupEntry>({
@@ -2852,15 +2900,15 @@ int main()
                 },
                 WGPUBindGroupEntry{
                     .binding = 2,
-                    .textureView = textureView,
+                    .textureView = neutralMetallicRoughnessTextureView,
                 },
                 WGPUBindGroupEntry{
                     .binding = 3,
-                    .textureView = textureView,
+                    .textureView = neutralNormalTextureView,
                 },
                 WGPUBindGroupEntry{
                     .binding = 4,
-                    .textureView = textureView,
+                    .textureView = neutralEmissiveTextureView,
                 },
                 WGPUBindGroupEntry{
                     .binding = 5,

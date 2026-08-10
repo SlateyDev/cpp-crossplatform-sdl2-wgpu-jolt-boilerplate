@@ -384,7 +384,7 @@ bool LoadGltfPrimitives(
             hasEmissiveTexture = true;
         }
 
-        const float occlusionStrength = material.occlusion_texture.texture == nullptr ? 1.0f : material.occlusion_texture.strength;
+        const float occlusionStrength = material.occlusion_texture.texture == nullptr ? 1.0f : material.occlusion_texture.scale;
         const auto flags = static_cast<float>(
             (material.alpha_mode == cgltf_alpha_mode_mask ? 1u : 0u) |
             (hasMetallicRoughnessTexture ? 2u : 0u) |
