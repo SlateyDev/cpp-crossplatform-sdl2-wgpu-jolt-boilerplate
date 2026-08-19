@@ -19,10 +19,6 @@ struct ModelMatrices {
     normal_matrix: mat4x4<f32>,
 }
 
-@group(0) @binding(0) var<uniform> camera: Camera;
-@group(0) @binding(1) var<uniform> light: Light;
-@group(1) @binding(0) var<uniform> model_matrices: ModelMatrices;
-
 struct VertexInput {
     @builtin(vertex_index) in_vertex_index: u32,
     @location(0) pos: vec3<f32>,
@@ -36,6 +32,16 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) world_position: vec3<f32>,
 }
+
+struct MaterialParams {
+    base_color_factor: vec4<f32>,
+    emissive_factor_metallic: vec4<f32>,
+    roughness_occlusion_alpha_cutoff_flags: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var<uniform> light: Light;
+@group(1) @binding(0) var<uniform> model_matrices: ModelMatrices;
 
 @vertex
 fn vs_main(
@@ -51,16 +57,11 @@ fn vs_main(
     return out;
 }
 
-@group(2) @binding(0) var myTexture: texture_2d<f32>;
-@group(2) @binding(1) var mySampler: sampler;
-@group(2) @binding(2) var metallicRoughnessTexture: texture_2d<f32>;
+@group(2) @binding(0) var albedoTexture: texture_2d<f32>;
+@group(2) @binding(1) var textureSampler: sampler;
+@group(2) @binding(2) var occlusionRoughnessMetallicTexture: texture_2d<f32>;
 @group(2) @binding(3) var normalTexture: texture_2d<f32>;
 @group(2) @binding(4) var emissiveTexture: texture_2d<f32>;
-struct MaterialParams {
-    base_color_factor: vec4<f32>,
-    emissive_factor_metallic: vec4<f32>,
-    roughness_occlusion_alpha_cutoff_flags: vec4<f32>,
-}
 @group(2) @binding(5) var<uniform> material: MaterialParams;
 
 @group(3) @binding(0) var shadowMap: texture_depth_2d_array;
@@ -127,32 +128,32 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
 fn fs_main(
     in: VertexOutput,
 ) -> @location(0) vec4<f32> {
-    let base_color_sample = textureSample(myTexture, mySampler, in.tex_coords);
+    let base_color_sample = textureSample(albedoTexture, textureSampler, in.tex_coords);
     let base_color = base_color_sample * material.base_color_factor;
     let material_flags = u32(material.roughness_occlusion_alpha_cutoff_flags.w + 0.5);
     let is_alpha_mask = (material_flags & 1u) != 0u;
-    let has_metallic_roughness_texture = (material_flags & 2u) != 0u;
+    let has_occlusion_roughness_metallic_texture = (material_flags & 2u) != 0u;
     let has_normal_texture = (material_flags & 4u) != 0u;
     let has_emissive_texture = (material_flags & 8u) != 0u;
     if (is_alpha_mask && base_color.a < material.roughness_occlusion_alpha_cutoff_flags.z) {
         discard;
     }
 
-    let metallic_roughness_sample = textureSample(metallicRoughnessTexture, mySampler, in.tex_coords);
+    let occlusion_roughness_metallic_sample = textureSample(occlusionRoughnessMetallicTexture, textureSampler, in.tex_coords);
     let roughness = select(
         1.0,
-        clamp(material.roughness_occlusion_alpha_cutoff_flags.x * metallic_roughness_sample.g, 0.045, 1.0),
-        has_metallic_roughness_texture
+        clamp(material.roughness_occlusion_alpha_cutoff_flags.x * occlusion_roughness_metallic_sample.g, 0.045, 1.0),
+        has_occlusion_roughness_metallic_texture
     );
     let metallic = select(
         0.0,
-        clamp(material.emissive_factor_metallic.w * metallic_roughness_sample.b, 0.0, 1.0),
-        has_metallic_roughness_texture
+        clamp(material.emissive_factor_metallic.w * occlusion_roughness_metallic_sample.b, 0.0, 1.0),
+        has_occlusion_roughness_metallic_texture
     );
 
     var n = normalize(in.world_normal);
     if (has_normal_texture) {
-        let normal_sample = textureSample(normalTexture, mySampler, in.tex_coords).xyz * 2.0 - vec3<f32>(1.0);
+        let normal_sample = textureSample(normalTexture, textureSampler, in.tex_coords).xyz * 2.0 - vec3<f32>(1.0);
         n = normalize(cotangent_frame(n, in.world_position, in.tex_coords) * normal_sample);
     }
     let v = normalize(camera.pos.xyz - in.world_position);
@@ -208,7 +209,7 @@ fn fs_main(
     let ambient = vec3<f32>(0.03) * albedo * material.roughness_occlusion_alpha_cutoff_flags.y;
     var emissive = vec3<f32>(0.0);
     if (has_emissive_texture) {
-        emissive = material.emissive_factor_metallic.xyz * textureSample(emissiveTexture, mySampler, in.tex_coords).xyz;
+        emissive = material.emissive_factor_metallic.xyz * textureSample(emissiveTexture, textureSampler, in.tex_coords).xyz;
     }
     var color = ambient + direct_lighting + emissive;
     color = color / (color + vec3<f32>(1.0));
