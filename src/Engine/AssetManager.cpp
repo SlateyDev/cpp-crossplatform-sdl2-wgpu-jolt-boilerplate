@@ -73,11 +73,8 @@ const EngineTexture* AssetManager::RequestTexture(const std::string& path, std::
 {
     outError.clear();
 
-    {
-        std::shared_lock readLock(mapMutex);
-        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, path)) {
-            return existingTexture;
-        }
+    if (const auto* existingTexture = GetCachedTexture(path)) {
+        return existingTexture;
     }
 
     auto texture = std::make_unique<EngineTexture>();
@@ -122,11 +119,8 @@ const EngineTexture* AssetManager::RequestSolidColorTexture(
 {
     outError.clear();
 
-    {
-        std::shared_lock readLock(mapMutex);
-        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, key)) {
-            return existingTexture;
-        }
+    if (const auto* existingTexture = GetCachedTexture(key)) {
+        return existingTexture;
     }
 
     auto texture = std::make_unique<EngineTexture>();
@@ -162,4 +156,16 @@ const EngineTexture* AssetManager::RequestSolidColorTexture(
 
         return loadedTexture;
     }
+}
+
+const EngineTexture* AssetManager::GetCachedTexture(const std::string& key) const
+{
+    {
+        std::shared_lock readLock(mapMutex);
+        if (const auto* existingTexture = FindReadyTextureByPath(pathToId, assets, key)) {
+            return existingTexture;
+        }
+    }
+
+    return nullptr;
 }

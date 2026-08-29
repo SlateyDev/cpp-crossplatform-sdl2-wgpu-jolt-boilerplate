@@ -2752,7 +2752,7 @@ int main()
     }();
 
     app.gpu.shadowBindGroupLayout = [&] {
-        const auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
+        constexpr auto entries = std::to_array<WGPUBindGroupLayoutEntry>({
             WGPUBindGroupLayoutEntry{
                 .binding = 0,
                 .visibility = WGPUShaderStage_Fragment,
@@ -2809,16 +2809,26 @@ int main()
         }
         return 1;
     }
-
     const auto texture = sampleTexture->getTexture();
     const auto textureView = sampleTexture->getTextureView();
-    const auto neutralMetallicRoughnessTexture = assetManager.RequestSolidColorTexture(
-        "__fallback__/metallic_roughness",
-        std::array<std::uint8_t, 4>{0u, 255u, 0u, 255u},
-        sampleTextureError
+
+    // const auto neutralBaseTexture = assetManager.GetCachedTexture("__fallback__/base_color");
+    // if (!neutralBaseTexture) {
+    //     PushDebugMessage("Couldn't find __fallback__/base_color", true);
+    //     if (overlayState.rmlOverlay) {
+    //         overlayState.rmlOverlay->Shutdown();
+    //         overlayState.rmlOverlay.reset();
+    //     }
+    //     return 1;
+    // }
+    // const auto texture = neutralBaseTexture->getTexture();
+    // const auto textureView = neutralBaseTexture->getTextureView();
+
+    const auto neutralMetallicRoughnessTexture = assetManager.GetCachedTexture(
+        "__fallback__/metallic_roughness"
     );
     if (!neutralMetallicRoughnessTexture) {
-        PushDebugMessage("Failed to create default metallic-roughness texture: " + sampleTextureError, true);
+        PushDebugMessage("Couldn't find __fallback__/metallic_roughness", true);
         if (overlayState.rmlOverlay) {
             overlayState.rmlOverlay->Shutdown();
             overlayState.rmlOverlay.reset();
@@ -2826,13 +2836,11 @@ int main()
         return 1;
     }
 
-    const auto neutralNormalTexture = assetManager.RequestSolidColorTexture(
-        "__fallback__/normal",
-        std::array<std::uint8_t, 4>{128u, 128u, 255u, 255u},
-        sampleTextureError
+    const auto neutralNormalTexture = assetManager.GetCachedTexture(
+        "__fallback__/normal"
     );
     if (!neutralNormalTexture) {
-        PushDebugMessage("Failed to create default normal texture: " + sampleTextureError, true);
+        PushDebugMessage("Couldn't find __fallback__/normal", true);
         if (overlayState.rmlOverlay) {
             overlayState.rmlOverlay->Shutdown();
             overlayState.rmlOverlay.reset();
@@ -2840,13 +2848,11 @@ int main()
         return 1;
     }
 
-    const auto neutralEmissiveTexture = assetManager.RequestSolidColorTexture(
-        "__fallback__/emissive",
-        std::array<std::uint8_t, 4>{0u, 0u, 0u, 255u},
-        sampleTextureError
+    const auto neutralEmissiveTexture = assetManager.GetCachedTexture(
+        "__fallback__/emissive"
     );
     if (!neutralEmissiveTexture) {
-        PushDebugMessage("Failed to create default emissive texture: " + sampleTextureError, true);
+        PushDebugMessage("Couldn't find __fallback__/emissive", true);
         if (overlayState.rmlOverlay) {
             overlayState.rmlOverlay->Shutdown();
             overlayState.rmlOverlay.reset();
@@ -2860,10 +2866,10 @@ int main()
     const auto neutralNormalTextureView = neutralNormalTexture->getTextureView();
     const auto neutralEmissiveTextureHandle = neutralEmissiveTexture->getTexture();
     const auto neutralEmissiveTextureView = neutralEmissiveTexture->getTextureView();
-    const PbrMaterialUniform sampleMaterialParams{
+    constexpr PbrMaterialUniform sampleMaterialParams{
         .baseColorFactor = glm::vec4(1.0f),
-        .emissiveFactorMetallic = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
-        .roughnessOcclusionAlphaCutoffFlags = glm::vec4(1.0f, 1.0f, 0.5f, 0.0f),
+        .emissiveFactorMetallic = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+        .roughnessOcclusionAlphaCutoffFlags = glm::vec4(1.0f, 1.0f, 0.5f, 10.0f),
     };
     const WGPUBufferDescriptor sampleMaterialBufferDesc{
         .label = ToWgpuString("Sample Material Uniform Buffer"),

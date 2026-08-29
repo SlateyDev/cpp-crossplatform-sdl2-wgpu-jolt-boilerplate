@@ -36,6 +36,7 @@ public:
     ~AssetManager();
     const EngineTexture* RequestTexture(const std::string& path, std::string& outError);
     const EngineTexture* RequestSolidColorTexture(const std::string& key, const std::array<std::uint8_t, 4>& rgba, std::string& outError);
+    const EngineTexture* GetCachedTexture(const std::string& key) const;
 };
 
 #endif

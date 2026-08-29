@@ -58,9 +58,9 @@ const std::vector<int> planeIndices = {
     0, 1, 2, 2, 3, 0,
 };
 
-Primitive Primitive::CreateFromPremadeData(WGPUDevice device, const std::vector<Vertex> &vertices, const std::vector<int> &indices, std::string materialKey)
+Primitive Primitive::CreateFromPremadeData(const WGPUDevice device, const std::vector<Vertex> &vertices, const std::vector<int> &indices, std::string materialKey)
 {
-    Primitive newPrimitive = Primitive {
+    auto newPrimitive = Primitive {
         .materialResourceName = materialKey,
         .vertexCount = static_cast<uint32_t>(vertices.size()),
         .indexCount = static_cast<uint32_t>(indices.size()),
