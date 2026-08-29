@@ -1098,6 +1098,24 @@ void SetConsoleOpen(AppState &app, const bool open)
     SDL_StopTextInput();
 }
 
+void ToggleFullscreen(AppState &app)
+{
+    if (!app.window) {
+        return;
+    }
+
+    const auto windowFlags = SDL_GetWindowFlags(app.window);
+    const auto isFullscreen = (windowFlags & SDL_WINDOW_FULLSCREEN) != 0u
+        || (windowFlags & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0u;
+    const auto targetFullscreenFlag = isFullscreen ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP;
+
+    if (SDL_SetWindowFullscreen(app.window, targetFullscreenFlag) == 0) {
+        PushDebugMessage(isFullscreen ? "Exited fullscreen mode" : "Entered fullscreen mode");
+    } else {
+        PushDebugMessage(std::string("Failed to toggle fullscreen mode: ") + SDL_GetError(), true);
+    }
+}
+
 struct alignas(16) RotationUniform {
     float angle = 0.0f;
 };
@@ -2143,6 +2161,13 @@ void PumpEvents(AppState &app)
             app.mouseLookEnabled = false;
             SDL_SetRelativeMouseMode(SDL_FALSE);
             PushDebugMessage("Mouse-look disabled due to focus loss");
+        } else if (
+            ev.type == SDL_KEYDOWN
+            && ev.key.repeat == 0
+            && (ev.key.keysym.scancode == SDL_SCANCODE_RETURN || ev.key.keysym.scancode == SDL_SCANCODE_KP_ENTER)
+            && (ev.key.keysym.mod & KMOD_ALT) != 0u
+        ) {
+            ToggleFullscreen(app);
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
             SetConsoleOpen(app, !overlayState.consoleOpen);
         } else if (overlayState.consoleOpen
